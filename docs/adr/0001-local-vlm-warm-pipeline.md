@@ -1,6 +1,6 @@
 # Local VLM with a warm-model single-GPU pipeline
 
-Recognition runs on a **local mlx-vlm** (default `numind/NuExtract3-mlx-8bits`, temp=0) rather than a cloud vision API — chosen for offline operation, zero per-page cost, and privacy, at the cost of raw speed and a per-model calibration burden. Because a single Apple GPU serializes inference, "concurrency" is deliberately **not** parallel recognition: the model loads once and stays resident (warm) while parallel CPU workers render pages ahead into a bounded queue and parallel writers drain results — keeping the one GPU saturated. That warm-model pipeline is the sole source of speedup.
+Recognition runs on a **local mlx-vlm** rather than a cloud vision API — chosen for offline operation, zero per-page cost, and privacy, at the cost of raw speed and a per-model calibration burden. The default model is `mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit` (temp=0): a grounding-capable Mixture-of-Experts VLM with ~3B active params — fast on a single GPU yet near-30B in transcription quality, ~17 GB resident (fits a 48 GB M4 Pro with headroom). The model id is swappable via `--model`; Calibration must be re-run on any change. Because a single Apple GPU serializes inference, "concurrency" is deliberately **not** parallel recognition: the model loads once and stays resident (warm) while parallel CPU workers render pages ahead into a bounded queue and parallel writers drain results — keeping the one GPU saturated. That warm-model pipeline is the sole source of speedup.
 
 ## Considered options
 
