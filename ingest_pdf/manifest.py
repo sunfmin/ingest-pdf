@@ -60,6 +60,11 @@ class Manifest:
             rec["pages"][str(page_index)] = {"status": status, "units": units}
             self._save_locked()
 
+    def save(self) -> None:
+        """Persist current state (used by the Outline finalize pass, ADR-0004)."""
+        with self._lock:
+            self._save_locked()
+
     def _save_locked(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")

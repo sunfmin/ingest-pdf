@@ -66,12 +66,15 @@ def run(
 
     # ── Plan across all PDFs (each job carries its resolved strategy) ──
     planned: list[tuple] = []  # (job, strat)
+    outline_targets: dict[str, Path] = {}  # pdf_key -> out_dir, for the post-transcription tree pass
     for pdf in pdfs:
         doc = fitz.open(pdf)
         try:
             strat = get_strategy(strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
             manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf))
+            if strat.name == "outline":
+                outline_targets[pdf_key] = out_root / pdf.stem
             for job in strat.plan(doc, pdf, pdf_key, out_root):
                 if pages and (job.page_index + 1) not in pages:
                     continue
@@ -82,8 +85,24 @@ def run(
     todo = [(j, s) for (j, s) in planned if not manifest.page_done(j.pdf_key, j.page_index)]
     skipped = len(planned) - len(todo)
     log(f"{len(pdfs)} PDF(s), {len(planned)} page(s) planned; {len(todo)} to do, {skipped} already done.")
+
+    counters = {"done": 0, "failed": 0, "skipped": skipped}
+    clock = threading.Lock()
+
+    def _finalize_outlines() -> None:
+        if not outline_targets:
+            return
+        from .strategies.outline import finalize as finalize_outline
+
+        for pdf_key, odir in outline_targets.items():
+            try:
+                finalize_outline(odir, manifest, pdf_key, log=log)
+            except Exception as e:
+                log(f"  ✗ outline finalize {odir.name}: {e}")
+
     if not todo:
-        return {"done": 0, "failed": 0, "skipped": skipped}
+        _finalize_outlines()  # a fully-resumed outline run still (idempotently) rebuilds the tree
+        return counters
 
     # ── Queues ──
     job_q: queue.Queue = queue.Queue()  # (job, strat) + render sentinels
@@ -94,9 +113,6 @@ def run(
         job_q.put(item)
     for _ in range(n_render):
         job_q.put(_SENTINEL)
-
-    counters = {"done": 0, "failed": 0, "skipped": skipped}
-    clock = threading.Lock()
 
     def render_worker() -> None:
         while True:
@@ -180,6 +196,7 @@ def run(
         vlm_thread.join()
         for t in writers:
             t.join()
+        _finalize_outlines()  # build the 第N章/<section>/ tree from the transcriptions (ADR-0004)
     except KeyboardInterrupt:
         # Per-page manifest saves mean whatever finished is safely recorded; just re-run to resume.
         log("\ninterrupted — progress saved to manifest.json; re-run to resume.")
