@@ -41,7 +41,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
     ap.add_argument("--pages", default=None, help="1-based page filter, e.g. '1-4,7' (handy for testing)")
     ap.add_argument("--stub", action="store_true", help="use the milestone-1 stub instead of the real VLM")
-    ap.add_argument("--model", default=None, help="mlx VLM model id (default: Qwen3-VL-30B-A3B-Instruct-4bit)")
+    ap.add_argument("--model", default=None, help="mlx VLM model id (default: numind/NuExtract3-mlx-8bits; ADR-0005)")
     ap.add_argument("--temperature", type=float, default=0.2, help="decode temperature (temp=0 degenerates; ADR-0001)")
     ap.add_argument("--repetition-penalty", type=float, default=1.05, help="repetition penalty")
     ap.add_argument("--max-tokens", type=int, default=4096, help="max output tokens per page")

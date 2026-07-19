@@ -1,4 +1,4 @@
-"""VLM workers: a milestone-1 stub and the real Qwen3-VL worker (milestone 2).
+"""VLM workers: a milestone-1 stub and the real mlx-vlm worker (milestone 2).
 
 Both expose the same interface the pipeline depends on:
     .model_id : str
@@ -17,7 +17,11 @@ from ..models import PageResult, RenderedPage
 from .postprocess import clean, model_revision
 from .prompt import TRANSCRIBE_PROMPT
 
-DEFAULT_MODEL = "mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit"
+# Default = the transcription model. Switched Qwen3-VL-30B-4bit → NuExtract3 per ADR-0005:
+# on the calibration corpus (14 pages × 3 rounds, scanned textbook + exam) NuExtract3 was
+# more faithful and more stable, at 4.8 GB vs 17 GB. NuExtract3 does NOT ground reliably
+# (ADR-0005) — M4's boundary boxes must come from a separately-pinned Qwen3-VL call.
+DEFAULT_MODEL = "numind/NuExtract3-mlx-8bits"
 
 
 class StubVLM:
