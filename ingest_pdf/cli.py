@@ -1,0 +1,74 @@
+"""`ingest` CLI — digest PDFs into a tree of (image, transcription) Units."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from typing import Optional
+
+
+def parse_pages(spec: Optional[str]) -> Optional[set[int]]:
+    """'1-4,7' -> {1,2,3,4,7} (1-based). None means all pages."""
+    if not spec:
+        return None
+    out: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            out.update(range(int(lo), int(hi) + 1))
+        else:
+            out.add(int(part))
+    return out or None
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="ingest",
+        description="Digest PDFs into a structured tree of (image, transcription) Units.",
+    )
+    ap.add_argument("inputs", nargs="+", help="PDF files or directories (recursed for *.pdf)")
+    ap.add_argument("--out", required=True, help="output root directory")
+    ap.add_argument(
+        "--strategy",
+        default="auto",
+        choices=["auto", "page", "outline", "question"],
+        help="segmentation strategy (default: auto; milestone 1 resolves auto→page)",
+    )
+    ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
+    ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
+    ap.add_argument("--pages", default=None, help="1-based page filter, e.g. '1-4,7' (handy for testing)")
+    args = ap.parse_args(argv)
+
+    from .pipeline import run
+    from .vlm.worker import StubVLM
+
+    vlm = StubVLM()  # milestone 2 swaps in the real Qwen3-VL worker (same interface)
+
+    try:
+        counters = run(
+            args.inputs,
+            args.out,
+            args.strategy,
+            vlm,
+            dpi=args.dpi,
+            n_render=args.concurrency,
+            pages=parse_pages(args.pages),
+        )
+    except NotImplementedError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+
+    print(
+        f"\ndone: {counters['done']}  failed: {counters['failed']}  "
+        f"skipped(resume): {counters['skipped']}  →  {args.out}"
+    )
+    return 1 if counters["failed"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
