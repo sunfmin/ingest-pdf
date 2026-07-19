@@ -40,12 +40,30 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
     ap.add_argument("--pages", default=None, help="1-based page filter, e.g. '1-4,7' (handy for testing)")
+    ap.add_argument("--stub", action="store_true", help="use the milestone-1 stub instead of the real VLM")
+    ap.add_argument("--model", default=None, help="mlx VLM model id (default: Qwen3-VL-30B-A3B-Instruct-4bit)")
+    ap.add_argument("--temperature", type=float, default=0.2, help="decode temperature (temp=0 degenerates; ADR-0001)")
+    ap.add_argument("--repetition-penalty", type=float, default=1.05, help="repetition penalty")
+    ap.add_argument("--max-tokens", type=int, default=4096, help="max output tokens per page")
     args = ap.parse_args(argv)
 
     from .pipeline import run
-    from .vlm.worker import StubVLM
 
-    vlm = StubVLM()  # milestone 2 swaps in the real Qwen3-VL worker (same interface)
+    if args.stub:
+        from .vlm.worker import StubVLM
+
+        vlm = StubVLM()
+    else:
+        from .vlm.worker import DEFAULT_MODEL, MlxVLM
+
+        model_id = args.model or DEFAULT_MODEL
+        print(f"loading {model_id} … (once; stays resident)", file=sys.stderr)
+        vlm = MlxVLM(
+            model_id=model_id,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
+            max_tokens=args.max_tokens,
+        )
 
     try:
         counters = run(
