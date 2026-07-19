@@ -21,7 +21,7 @@ The pluggable rule that maps one PDF into a tree of Units and the directories th
 _Avoid_: mode, parser, splitter
 
 **Outline Strategy（章节切分）**:
-Segmentation driven by the PDF's embedded bookmark outline (册→章→节); nested directories mirror the outline, pages are the leaf Units. The textbook path.
+The textbook path: pages grouped into a `第N章/<section>/` tree derived from **section numbers parsed out of each page's transcription** (e.g. `6.2.3 向量的数乘运算`), with heading-less pages inheriting the last-seen section; pages are the leaf Units. (The corpus has no PDF bookmarks and is half-scanned, and the VLM won't answer a direct heading question — ADR-0004 — so structure is harvested from the transcription, not a bookmark outline.)
 
 **Question Strategy（试题切分）**:
 Segmentation that splits an exam paper into per-question Units by detecting question boundaries. The exam path.
