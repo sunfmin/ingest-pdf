@@ -41,6 +41,21 @@ class StubVLM:
         return PageResult(markdown=md, questions=[])
 
 
+class NoVLM:
+    """Placeholder for explicitly zero-VLM runs (e.g. --strategy question, ADR-0006).
+
+    Carries model_id/revision so the pipeline's provenance plumbing has something to
+    read, but transcribe() must never be called (those strategies set needs_vlm=False).
+    Lets `ingest --strategy question` run without the heavy `vlm` extra installed.
+    """
+
+    model_id = "none"
+    revision = "n/a"
+
+    def transcribe(self, rendered: RenderedPage) -> PageResult:  # pragma: no cover - guarded by needs_vlm
+        raise RuntimeError("VLM transcribe invoked on a zero-VLM strategy run; this is a bug.")
+
+
 class MlxVLM:
     """Real local worker over mlx-vlm. Loads the model once (resident)."""
 

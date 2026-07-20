@@ -37,13 +37,25 @@ class Manifest:
             self.data["model"] = {"id": model_id, "revision": revision, "dpi": dpi}
             self._save_locked()
 
-    def ensure_pdf(self, pdf_key: str, strategy: str, sig: dict) -> None:
-        """Register a PDF; reset its pages if the source or strategy changed (stale)."""
+    def ensure_pdf(self, pdf_key: str, strategy: str, sig: dict, model: str | None = None) -> None:
+        """Register a PDF; reset its pages if source, strategy, or model changed (stale).
+
+        `model` is the per-PDF segmentation+transcription model (ADR-0006): for the
+        VLM-driven strategies it equals the VLM id; for Question (zero-VLM) it is the
+        MinerU id. A model change invalidates provenance, so it resets like a strategy
+        change. Stored per-PDF so a single run mixing strategies stays self-consistent.
+        """
         with self._lock:
             pdfs = self.data["pdfs"]
             rec = pdfs.get(pdf_key)
-            if rec is None or rec.get("source") != sig or rec.get("strategy") != strategy:
-                pdfs[pdf_key] = {"strategy": strategy, "source": sig, "pages": {}}
+            stale = (
+                rec is None
+                or rec.get("source") != sig
+                or rec.get("strategy") != strategy
+                or rec.get("model") != model
+            )
+            if stale:
+                pdfs[pdf_key] = {"strategy": strategy, "source": sig, "model": model, "pages": {}}
             self._save_locked()
 
     def page_done(self, pdf_key: str, page_index: int) -> bool:

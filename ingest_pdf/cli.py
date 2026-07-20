@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -24,18 +25,101 @@ def parse_pages(spec: Optional[str]) -> Optional[set[int]]:
     return out or None
 
 
+def _make_vlm(args):
+    """Build the VLM worker per flags. Question strategy ⇒ NoVLM (no vlm extra needed)."""
+    if args.stub:
+        from .vlm.worker import StubVLM
+
+        return StubVLM()
+    if args.strategy == "question":
+        from .vlm.worker import NoVLM  # zero-VLM path (ADR-0006)
+
+        return NoVLM()
+    from .vlm.worker import DEFAULT_MODEL, MlxVLM
+
+    model_id = args.model or DEFAULT_MODEL
+    print(f"loading {model_id} … (once; stays resident)", file=sys.stderr)
+    return MlxVLM(
+        model_id=model_id,
+        temperature=args.temperature,
+        repetition_penalty=args.repetition_penalty,
+        max_tokens=args.max_tokens,
+    )
+
+
+def _inspect_estimate(name: str, doc) -> object:
+    """Cheap, zero-ML size estimate per resolved strategy (used by `--inspect`)."""
+    from .strategies._mineru import MBlock
+    from .strategies.question import group_questions
+
+    stream = []
+    for pi, page in enumerate(doc):
+        for line in page.get_text().splitlines():
+            t = line.strip()
+            if t:
+                stream.append((pi, MBlock(bbox=(0.0, 0.0, 0.0, 0.0), text=t, type="text")))
+    if name == "question":
+        return len(group_questions(stream, log=lambda *_: None)) if stream else "unknown (scanned)"
+    if name == "outline":
+        return "chapter/section tree resolved after transcription (ADR-0004)"
+    return doc.page_count
+
+
+def run_inspect(args) -> int:
+    """Print a per-PDF structure probe as JSON (no MinerU, no VLM) — the skill's
+    'analyze structure + design directory' step, done cheaply by the tool."""
+    import json
+
+    import fitz
+
+    from .pipeline import _iter_pdfs
+    from .strategies.detect import get_strategy
+
+    rows = []
+    for pdf in _iter_pdfs([Path(p) for p in args.inputs]):
+        doc = fitz.open(pdf)
+        try:
+            strat = get_strategy(args.strategy, doc, pdf)
+            name = strat.name
+            rows.append(
+                {
+                    "path": str(pdf.resolve()),
+                    "pages": doc.page_count,
+                    "strategy": name,
+                    "needs_mineru": name == "question",
+                    "needs_vlm": name in ("page", "outline"),
+                    "out_subdir": pdf.stem,
+                    "estimate": _inspect_estimate(name, doc),
+                }
+            )
+        finally:
+            doc.close()
+    print(json.dumps(rows, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="ingest",
         description="Digest PDFs into a structured tree of (image, transcription) Units.",
     )
-    ap.add_argument("inputs", nargs="+", help="PDF files or directories (recursed for *.pdf)")
-    ap.add_argument("--out", required=True, help="output root directory")
+    ap.add_argument("inputs", nargs="*", help="PDF files or directories (recursed for *.pdf)")
+    ap.add_argument(
+        "--install-mineru",
+        action="store_true",
+        help="one-time setup: build the isolated MinerU venv + download models (ADR-0006); then exit",
+    )
+    ap.add_argument(
+        "--inspect",
+        action="store_true",
+        help="probe each PDF's structure (strategy/pages/estimate) as JSON; no MinerU/VLM; then exit",
+    )
+    ap.add_argument("--out", default=None, help="output root directory (required unless --inspect/--install-mineru)")
     ap.add_argument(
         "--strategy",
         default="auto",
         choices=["auto", "page", "outline", "question"],
-        help="segmentation strategy (default: auto; milestone 1 resolves auto→page)",
+        help="segmentation strategy (default: auto; question=MinerU, zero-VLM, ADR-0006)",
     )
     ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
@@ -47,23 +131,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--max-tokens", type=int, default=4096, help="max output tokens per page")
     args = ap.parse_args(argv)
 
+    if args.install_mineru:
+        from .strategies._mineru import install_mineru
+
+        install_mineru()
+        return 0
+
+    if not args.inputs:
+        ap.error("the following arguments are required: inputs (or pass --inspect / --install-mineru)")
+
+    if args.inspect:
+        return run_inspect(args)
+
+    if not args.out:
+        ap.error("the following arguments are required: --out")
+
     from .pipeline import run
 
-    if args.stub:
-        from .vlm.worker import StubVLM
-
-        vlm = StubVLM()
-    else:
-        from .vlm.worker import DEFAULT_MODEL, MlxVLM
-
-        model_id = args.model or DEFAULT_MODEL
-        print(f"loading {model_id} … (once; stays resident)", file=sys.stderr)
-        vlm = MlxVLM(
-            model_id=model_id,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-            max_tokens=args.max_tokens,
-        )
+    vlm = _make_vlm(args)
 
     try:
         counters = run(

@@ -15,18 +15,24 @@ from __future__ import annotations
 import os
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable
 
 import fitz
 
 from .manifest import Manifest
-from .models import RenderedPage, RunContext
+from .models import PageResult, RenderedPage, RunContext
 from .provenance import header
 from .render import render_page
 from .strategies.detect import get_strategy
 
 _SENTINEL = None
+# A strategy with needs_vlm=False (e.g. Question/MinerU) owns its own segmentation +
+# transcription, so the VLM slot is intentionally bypassed for its pages. This sentinel
+# is distinct from None (which means the VLM call *failed*) so the writer records success.
+_VLM_SKIP = object()
+_EMPTY_PAGE_RESULT = PageResult(markdown="", questions=[])
 
 
 def _iter_pdfs(inputs: Iterable[Path]) -> list[Path]:
@@ -64,23 +70,46 @@ def run(
         log("no PDFs found.")
         return {"done": 0, "failed": 0, "skipped": 0}
 
-    # ── Plan across all PDFs (each job carries its resolved strategy) ──
+    # ── Plan across all PDFs, in parallel (each job carries its resolved strategy) ──
+    # Parallelism targets the per-PDF MinerU call inside plan() — the batch bottleneck for
+    # the Question strategy. Safe because get_strategy() builds a fresh strategy instance
+    # per PDF (so per-strategy state like _pages never crosses PDFs), ensure_pdf() locks
+    # internally, and per-PDF output dirs / cache dirs are disjoint. With a warm MinerU
+    # server (MINERU_API_URL) the parallel submits overlap against one model load.
     planned: list[tuple] = []  # (job, strat)
-    outline_targets: dict[str, Path] = {}  # pdf_key -> out_dir, for the post-transcription tree pass
-    for pdf in pdfs:
+    finalize_targets: dict[str, tuple] = {}  # pdf_key -> (strat, out_dir); strategies with a finalize pass
+    plan_lock = threading.Lock()
+
+    def plan_pdf(pdf: Path) -> None:
         doc = fitz.open(pdf)
         try:
             strat = get_strategy(strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
-            manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf))
-            if strat.name == "outline":
-                outline_targets[pdf_key] = out_root / pdf.stem
+            # Per-PDF provenance model = "id@revision": the strategy's own model when
+            # it owns segmentation+transcription (Question/MinerU), else the VLM
+            # (ADR-0006). Including the revision makes a model upgrade invalidate pages.
+            _mid = getattr(strat, "model_id", None) or vlm.model_id
+            _mrev = getattr(strat, "revision", None) or vlm.revision
+            manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
+            local = []
             for job in strat.plan(doc, pdf, pdf_key, out_root):
                 if pages and (job.page_index + 1) not in pages:
                     continue
-                planned.append((job, strat))
+                local.append((job, strat))
+            with plan_lock:
+                planned.extend(local)
+                if hasattr(strat, "finalize"):
+                    finalize_targets[pdf_key] = (strat, out_root / pdf.stem)
         finally:
             doc.close()
+
+    plan_workers = max(1, min(int(os.environ.get("INGEST_PLAN_WORKERS", "3")), len(pdfs)))
+    if plan_workers == 1:
+        for pdf in pdfs:
+            plan_pdf(pdf)
+    else:
+        with ThreadPoolExecutor(max_workers=plan_workers) as ex:
+            list(ex.map(plan_pdf, pdfs))  # realize to surface any per-PDF plan error
 
     todo = [(j, s) for (j, s) in planned if not manifest.page_done(j.pdf_key, j.page_index)]
     skipped = len(planned) - len(todo)
@@ -89,19 +118,15 @@ def run(
     counters = {"done": 0, "failed": 0, "skipped": skipped}
     clock = threading.Lock()
 
-    def _finalize_outlines() -> None:
-        if not outline_targets:
-            return
-        from .strategies.outline import finalize as finalize_outline
-
-        for pdf_key, odir in outline_targets.items():
+    def _finalize() -> None:
+        for pdf_key, (strat, odir) in finalize_targets.items():
             try:
-                finalize_outline(odir, manifest, pdf_key, log=log)
+                strat.finalize(odir, manifest, pdf_key, log=log)
             except Exception as e:
-                log(f"  ✗ outline finalize {odir.name}: {e}")
+                log(f"  ✗ {getattr(strat, 'name', '?')} finalize {odir.name}: {e}")
 
     if not todo:
-        _finalize_outlines()  # a fully-resumed outline run still (idempotently) rebuilds the tree
+        _finalize()  # a fully-resumed run still (idempotently) runs each strategy's finalize
         return counters
 
     # ── Queues ──
@@ -139,6 +164,9 @@ def run(
             if rendered is None:
                 write_q.put((job, strat, None, None))
                 continue
+            if not getattr(strat, "needs_vlm", True):
+                write_q.put((job, strat, rendered, _VLM_SKIP))  # zero-VLM path (ADR-0006)
+                continue
             try:
                 result = vlm.transcribe(rendered)
                 write_q.put((job, strat, rendered, result))
@@ -157,10 +185,20 @@ def run(
                 with clock:
                     counters["failed"] += 1
                 continue
+            # _VLM_SKIP = success without a VLM result; the strategy supplies its own
+            # data and ignores the (empty) PageResult we hand to emit.
+            emit_result = _EMPTY_PAGE_RESULT if result is _VLM_SKIP else result
             try:
-                ctx = RunContext(dpi, vlm.model_id, vlm.revision, strat.name)
+                # Provenance per Unit follows the strategy's model when it owns
+                # segmentation+transcription (zero-VLM Question), else the VLM.
+                ctx = RunContext(
+                    dpi,
+                    getattr(strat, "model_id", None) or vlm.model_id,
+                    getattr(strat, "revision", None) or vlm.revision,
+                    strat.name,
+                )
                 recs = []
-                for u in strat.emit(rendered, result):
+                for u in strat.emit(rendered, emit_result):
                     md_path = job.out_dir / f"{u.name}.md"
                     md_path.parent.mkdir(parents=True, exist_ok=True)
                     md_path.write_text(header(ctx, job.pdf_path, u) + u.md_body, "utf-8")
@@ -196,7 +234,7 @@ def run(
         vlm_thread.join()
         for t in writers:
             t.join()
-        _finalize_outlines()  # build the 第N章/<section>/ tree from the transcriptions (ADR-0004)
+        _finalize()  # outline tree (ADR-0004) / question cross-page assembly (ADR-0006)
     except KeyboardInterrupt:
         # Per-page manifest saves mean whatever finished is safely recorded; just re-run to resume.
         log("\ninterrupted — progress saved to manifest.json; re-run to resume.")

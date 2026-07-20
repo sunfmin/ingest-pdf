@@ -113,3 +113,7 @@ def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
     # prune now-empty flat dir residue is unnecessary (files were moved, not copied)
     manifest.save()
     log(f"  ✓ outline tree built for {out_dir.name}: {moved} page(s) placed, {len(page_idxs)} total")
+
+
+# Exposed on the class so the pipeline's generic finalize collector (ADR-0006) can call it.
+OutlineStrategy.finalize = staticmethod(finalize)
