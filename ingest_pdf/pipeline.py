@@ -21,12 +21,17 @@ from typing import Callable, Iterable
 import fitz
 
 from .manifest import Manifest
-from .models import RenderedPage, RunContext
+from .models import PageResult, RenderedPage, RunContext
 from .provenance import header
 from .render import render_page
 from .strategies.detect import get_strategy
 
 _SENTINEL = None
+# A strategy with needs_vlm=False (e.g. Question/MinerU) owns its own segmentation +
+# transcription, so the VLM slot is intentionally bypassed for its pages. This sentinel
+# is distinct from None (which means the VLM call *failed*) so the writer records success.
+_VLM_SKIP = object()
+_EMPTY_PAGE_RESULT = PageResult(markdown="", questions=[])
 
 
 def _iter_pdfs(inputs: Iterable[Path]) -> list[Path]:
@@ -144,6 +149,9 @@ def run(
             if rendered is None:
                 write_q.put((job, strat, None, None))
                 continue
+            if not getattr(strat, "needs_vlm", True):
+                write_q.put((job, strat, rendered, _VLM_SKIP))  # zero-VLM path (ADR-0006)
+                continue
             try:
                 result = vlm.transcribe(rendered)
                 write_q.put((job, strat, rendered, result))
@@ -162,6 +170,9 @@ def run(
                 with clock:
                     counters["failed"] += 1
                 continue
+            # _VLM_SKIP = success without a VLM result; the strategy supplies its own
+            # data and ignores the (empty) PageResult we hand to emit.
+            emit_result = _EMPTY_PAGE_RESULT if result is _VLM_SKIP else result
             try:
                 # Provenance per Unit follows the strategy's model when it owns
                 # segmentation+transcription (zero-VLM Question), else the VLM.
@@ -172,7 +183,7 @@ def run(
                     strat.name,
                 )
                 recs = []
-                for u in strat.emit(rendered, result):
+                for u in strat.emit(rendered, emit_result):
                     md_path = job.out_dir / f"{u.name}.md"
                     md_path.parent.mkdir(parents=True, exist_ok=True)
                     md_path.write_text(header(ctx, job.pdf_path, u) + u.md_body, "utf-8")

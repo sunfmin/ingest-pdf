@@ -40,7 +40,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--strategy",
         default="auto",
         choices=["auto", "page", "outline", "question"],
-        help="segmentation strategy (default: auto; milestone 1 resolves auto→page)",
+        help="segmentation strategy (default: auto; question=MinerU, zero-VLM, ADR-0006)",
     )
     ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
