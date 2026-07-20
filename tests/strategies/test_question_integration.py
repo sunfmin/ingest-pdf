@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import fitz
+from PIL import Image
 
 from ingest_pdf import pipeline
 from ingest_pdf.strategies import _mineru
@@ -80,17 +81,31 @@ def test_question_pipeline_zero_vlm_with_cross_page_fragments(tmp_path, monkeypa
     assert rec["model"] == "mineru@test"  # per-PDF provenance = strategy model
     assert rec["strategy"] == "question"
 
+    # finalize assembled fragments → one Unit per question; cross-page Q2 lands on its 1st page
     p0_units = [u["name"] for u in rec["pages"]["0"]["units"]]
     p1_units = [u["name"] for u in rec["pages"]["1"]["units"]]
-    assert p0_units == ["q01__p0001", "q02__p0001"]
-    assert p1_units == ["q02__p0002", "q03__p0002"]
+    assert p0_units == ["q01", "q02"]
+    assert p1_units == ["q03"]
+    assert all(u["box"] is None for u in rec["pages"]["0"]["units"])  # merged units carry no single box
 
     unit_dir = out_root / "paper"
-    for name in p0_units + p1_units:
+    for name in ("q01", "q02", "q03"):
         assert (unit_dir / f"{name}.png").exists()
-        md = (unit_dir / f"{name}.md").read_text()
-        assert "mineru@test" in md and "strategy question" in md  # provenance header
+        assert (unit_dir / f"{name}.md").exists()
+    # fragments + intermediate full-page renders are cleaned up
+    for frag in ("q01__p0001", "q02__p0001", "q02__p0002", "q03__p0002"):
+        assert not (unit_dir / f"{frag}.png").exists()
+        assert not (unit_dir / f"{frag}.md").exists()
+    assert not (unit_dir / ".renders").exists()
 
-    # full-page renders are the crop source (intermediates; cleaned in stage 5)
-    assert (unit_dir / ".renders" / "page-0001.png").exists()
-    assert (unit_dir / ".renders" / "page-0002.png").exists()
+    # cross-page Q2 image is the vertical concat of its two fragments ⇒ taller than single-page Qs
+    h = {n: Image.open(unit_dir / f"{n}.png").height for n in ("q01", "q02", "q03")}
+    assert h["q02"] > h["q01"] and h["q02"] > h["q03"]
+
+    # provenance headers reflect assembly
+    q02_md = (unit_dir / "q02.md").read_text()
+    assert "mineru@test" in q02_md and "strategy question" in q02_md and "assembled" in q02_md
+    assert "pages 1, 2" in q02_md
+    assert "pages 1" in (unit_dir / "q01.md").read_text()
+    # assembled body still carries the question text from both pages
+    assert "第二题题干（跨页起）" in q02_md and "第二题题干（跨页续）" in q02_md

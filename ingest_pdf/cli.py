@@ -24,6 +24,28 @@ def parse_pages(spec: Optional[str]) -> Optional[set[int]]:
     return out or None
 
 
+def _make_vlm(args):
+    """Build the VLM worker per flags. Question strategy ⇒ NoVLM (no vlm extra needed)."""
+    if args.stub:
+        from .vlm.worker import StubVLM
+
+        return StubVLM()
+    if args.strategy == "question":
+        from .vlm.worker import NoVLM  # zero-VLM path (ADR-0006)
+
+        return NoVLM()
+    from .vlm.worker import DEFAULT_MODEL, MlxVLM
+
+    model_id = args.model or DEFAULT_MODEL
+    print(f"loading {model_id} … (once; stays resident)", file=sys.stderr)
+    return MlxVLM(
+        model_id=model_id,
+        temperature=args.temperature,
+        repetition_penalty=args.repetition_penalty,
+        max_tokens=args.max_tokens,
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="ingest",
@@ -63,21 +85,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     from .pipeline import run
 
-    if args.stub:
-        from .vlm.worker import StubVLM
-
-        vlm = StubVLM()
-    else:
-        from .vlm.worker import DEFAULT_MODEL, MlxVLM
-
-        model_id = args.model or DEFAULT_MODEL
-        print(f"loading {model_id} … (once; stays resident)", file=sys.stderr)
-        vlm = MlxVLM(
-            model_id=model_id,
-            temperature=args.temperature,
-            repetition_penalty=args.repetition_penalty,
-            max_tokens=args.max_tokens,
-        )
+    vlm = _make_vlm(args)
 
     try:
         counters = run(

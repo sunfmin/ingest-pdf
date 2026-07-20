@@ -21,6 +21,7 @@ from pathlib import Path
 import fitz
 from PIL import Image
 
+from .. import provenance
 from ..models import OutUnit, PageJob, PageResult, RenderedPage
 from . import _crop, _mineru
 from ._mineru import MBlock
@@ -192,3 +193,99 @@ class QuestionStrategy:
                 )
             )
         return units
+
+
+# ── cross-page assembly (finalize) ──────────────────────────────────────────────
+
+_FRAG_NAME = re.compile(r"^q(\d+)__p\d+$")  # per-page fragment, e.g. q02__p0002
+_FINAL_NAME = re.compile(r"^q(\d+)$")  # assembled question, e.g. q02
+
+
+def _strip_header(md: str) -> str:
+    if md.startswith("<!--"):
+        end = md.find("-->")
+        if end != -1:
+            return md[end + 3 :].lstrip()
+    return md
+
+
+def _qnum(name: str) -> int | None:
+    m = _FRAG_NAME.match(name) or _FINAL_NAME.match(name)
+    return int(m.group(1)) if m else None
+
+
+def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
+    """Assemble per-page fragments into one Unit per question (cross-page concat).
+
+    Idempotent + resume-safe (mirrors outline.finalize, ADR-0004): only fragment-named
+    Units (qNN__pPPPP) are merged; already-assembled qNN Units are left untouched, so a
+    re-run after finalize is a no-op. The merged Unit is recorded under its first page;
+    fragment image/md files and the intermediate .renders/ are removed.
+    """
+    import shutil
+
+    rec = manifest.data["pdfs"].get(pdf_key)
+    if not rec:
+        return
+    dpi = manifest.data.get("model", {}).get("dpi", 0)
+    model = rec.get("model", "unknown")
+    strategy = rec.get("strategy", "question")
+    pdf_name = Path(pdf_key).name
+
+    page_idxs = sorted(int(k) for k, v in rec["pages"].items() if v.get("status") == "done")
+    groups: dict[int, list[tuple[int, dict]]] = {}
+    for pi in page_idxs:
+        for u in rec["pages"][str(pi)].get("units") or []:
+            if _FRAG_NAME.match(u["name"]):
+                groups.setdefault(_qnum(u["name"]), []).append((pi, u))
+
+    # per-page unit lists with fragments stripped (final Units kept as-is)
+    new_units: dict[int, list[dict]] = {
+        pi: [u for u in (rec["pages"][str(pi)].get("units") or []) if not _FRAG_NAME.match(u["name"])]
+        for pi in page_idxs
+    }
+
+    merged = 0
+    for qnum in sorted(groups):
+        frags = groups[qnum]
+        first_pi = frags[0][0]
+        pngs, bodies, pages = [], [], []
+        for pi, u in frags:
+            p_png = out_dir / u["image"]
+            if p_png.exists():
+                pngs.append(p_png.read_bytes())
+            p_md = out_dir / u["md"]
+            if p_md.exists():
+                bodies.append(_strip_header(p_md.read_text("utf-8")))
+            pages.append(pi + 1)
+        canon = f"q{qnum:02d}"
+        if pngs:
+            (out_dir / f"{canon}.png").write_bytes(_crop.concat_vertical(pngs))
+        (out_dir / f"{canon}.md").write_text(
+            provenance.merged_header(model, dpi, strategy, pdf_name, pages) + "\n\n".join(bodies),
+            "utf-8",
+        )
+        for _, u in frags:  # delete fragment files
+            for key in ("image", "md"):
+                fp = out_dir / u[key]
+                if fp.exists():
+                    fp.unlink()
+        new_units[first_pi].append(
+            {"name": canon, "image": f"{canon}.png", "md": f"{canon}.md", "source_page": first_pi + 1, "box": None}
+        )
+        merged += 1
+
+    for pi in page_idxs:
+        rec["pages"][str(pi)]["units"] = new_units[pi]
+
+    renders = out_dir / ".renders"
+    if renders.exists():
+        shutil.rmtree(renders, ignore_errors=True)
+    manifest.save()
+    log(
+        f"  ✓ question finalize {out_dir.name}: {merged} question(s) assembled "
+        f"(cross-page merged where needed); fragments + .renders cleaned"
+    )
+
+
+QuestionStrategy.finalize = staticmethod(finalize)

@@ -71,7 +71,7 @@ def run(
 
     # ── Plan across all PDFs (each job carries its resolved strategy) ──
     planned: list[tuple] = []  # (job, strat)
-    outline_targets: dict[str, Path] = {}  # pdf_key -> out_dir, for the post-transcription tree pass
+    finalize_targets: dict[str, tuple] = {}  # pdf_key -> (strat, out_dir); strategies with a finalize pass
     for pdf in pdfs:
         doc = fitz.open(pdf)
         try:
@@ -83,8 +83,8 @@ def run(
             _mid = getattr(strat, "model_id", None) or vlm.model_id
             _mrev = getattr(strat, "revision", None) or vlm.revision
             manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
-            if strat.name == "outline":
-                outline_targets[pdf_key] = out_root / pdf.stem
+            if hasattr(strat, "finalize"):
+                finalize_targets[pdf_key] = (strat, out_root / pdf.stem)
             for job in strat.plan(doc, pdf, pdf_key, out_root):
                 if pages and (job.page_index + 1) not in pages:
                     continue
@@ -99,19 +99,15 @@ def run(
     counters = {"done": 0, "failed": 0, "skipped": skipped}
     clock = threading.Lock()
 
-    def _finalize_outlines() -> None:
-        if not outline_targets:
-            return
-        from .strategies.outline import finalize as finalize_outline
-
-        for pdf_key, odir in outline_targets.items():
+    def _finalize() -> None:
+        for pdf_key, (strat, odir) in finalize_targets.items():
             try:
-                finalize_outline(odir, manifest, pdf_key, log=log)
+                strat.finalize(odir, manifest, pdf_key, log=log)
             except Exception as e:
-                log(f"  ✗ outline finalize {odir.name}: {e}")
+                log(f"  ✗ {getattr(strat, 'name', '?')} finalize {odir.name}: {e}")
 
     if not todo:
-        _finalize_outlines()  # a fully-resumed outline run still (idempotently) rebuilds the tree
+        _finalize()  # a fully-resumed run still (idempotently) runs each strategy's finalize
         return counters
 
     # ── Queues ──
@@ -219,7 +215,7 @@ def run(
         vlm_thread.join()
         for t in writers:
             t.join()
-        _finalize_outlines()  # build the 第N章/<section>/ tree from the transcriptions (ADR-0004)
+        _finalize()  # outline tree (ADR-0004) / question cross-page assembly (ADR-0006)
     except KeyboardInterrupt:
         # Per-page manifest saves mean whatever finished is safely recorded; just re-run to resume.
         log("\ninterrupted — progress saved to manifest.json; re-run to resume.")
