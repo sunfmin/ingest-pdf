@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import time
+import zipfile
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import Mock
+
+import httpx
 
 from ingest_pdf.strategies import _mineru as mu
 
@@ -163,3 +167,94 @@ def test_run_mineru_raises_when_not_installed(monkeypatch, tmp_path):
         assert "install-mineru" in str(e)
     else:  # pragma: no cover
         raise AssertionError("expected SystemExit")
+
+
+# ── warm-server (MINERU_API_URL) HTTP path ───────────────────────────────────────
+
+
+def _api_zip(stem: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(f"{stem}/hybrid_auto/{stem}_middle.json", json.dumps({"pdf_info": [{"para_blocks": []}]}))
+    return buf.getvalue()
+
+
+class _FakeResp:
+    status_code = 200
+
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+
+    def raise_for_status(self) -> None:
+        pass
+
+
+def test_run_mineru_uses_warm_api_when_url_set(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINERU_API_URL", "http://127.0.0.1:9")
+    calls = []
+
+    def fake_post(url, *, data=None, files=None, timeout=None, follow_redirects=False, **_):
+        calls.append((url, data, files))
+        return _FakeResp(_api_zip("paper"))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF")
+
+    middle = mu.run_mineru(pdf, tmp_path / "c", log=lambda *_: None)
+
+    assert len(calls) == 1
+    url, data, files = calls[0]
+    assert url.endswith("/file_parse")
+    assert data["backend"] == "hybrid-engine" and data["parse_method"] == "auto"
+    assert data["return_middle_json"] == "true" and data["response_format_zip"] == "true"
+    assert files[0][0] == "files"
+    assert middle.exists() and middle.name == "paper_middle.json"
+    # zip unpacked into the canonical CLI layout under out_dir
+    assert (tmp_path / "c" / "mineru_out" / "paper" / "hybrid_auto" / "paper_middle.json").exists()
+
+
+def test_run_mineru_cache_hit_skips_api(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINERU_API_URL", "http://127.0.0.1:9")
+    post = Mock()
+    monkeypatch.setattr(httpx, "post", post)
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"x")
+    os.utime(pdf, (1000.0, 1000.0))
+    cache = tmp_path / "c"
+    middle = cache / "mineru_out" / "p" / "hybrid_auto" / "p_middle.json"
+    middle.parent.mkdir(parents=True)
+    middle.write_text("{}")
+    os.utime(middle, (2000.0, 2000.0))
+
+    assert mu.run_mineru(pdf, cache, log=lambda *_: None) == middle
+    post.assert_not_called()  # cache hit short-circuits before the network
+
+
+def test_run_mineru_api_failure_falls_back_to_cli(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINERU_API_URL", "http://127.0.0.1:9")
+
+    def _boom(*_a, **_k):
+        raise httpx.ConnectError("down", request=httpx.Request("POST", "http://127.0.0.1:9/file_parse"))
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    monkeypatch.setattr(mu, "find_mineru_bin", lambda: ["/fake/mineru"])
+    monkeypatch.setattr(mu, "MINERU_CONFIG_PATH", tmp_path / "mineru.json")
+
+    cache = tmp_path / "c"
+    out_dir = cache / "mineru_out"
+
+    def fake_run(cmd, env=None, **_):
+        (out_dir / "paper" / "hybrid_auto").mkdir(parents=True, exist_ok=True)
+        (out_dir / "paper" / "hybrid_auto" / "paper_middle.json").write_text("{}")
+        return CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    run_mock = Mock(side_effect=fake_run)
+    monkeypatch.setattr("subprocess.run", run_mock)
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF")
+    os.utime(pdf, (5000.0, 5000.0))
+
+    middle = mu.run_mineru(pdf, cache, log=lambda *_: None)
+    run_mock.assert_called_once()  # API connect failed → CLI ran
+    assert middle.exists()

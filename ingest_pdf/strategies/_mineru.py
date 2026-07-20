@@ -99,6 +99,57 @@ def _find_middle(out_dir: Path) -> Path | None:
     return hits[0] if hits else None
 
 
+def _http_parse_zip(api_url: str, pdf: Path, out_dir: Path, log: Callable[[str], None]) -> Path:
+    """POST the PDF to a warm `mineru-api` server's synchronous /file_parse and unzip the
+    canonical output tree into out_dir (same layout the CLI writes). The server keeps models
+    warm across a batch, so this avoids the per-PDF cold model load that the CLI pays.
+
+    response_format_zip=true ⇒ the body is a zip whose internal paths are
+    `<stem>/hybrid_auto/<stem>_middle.json` (rglob-found regardless of wrapper depth).
+    """
+    import zipfile
+
+    try:
+        import httpx
+    except ImportError as e:  # pragma: no cover - httpx is a core dep
+        raise RuntimeError("httpx not installed (needed for MINERU_API_URL warm-server mode)") from e
+
+    url = api_url.rstrip("/") + "/file_parse"
+    data = {
+        "backend": "hybrid-engine",  # + parse_method auto == the CLI's hybrid-auto-engine
+        "parse_method": "auto",
+        "formula_enable": "true",
+        "table_enable": "true",
+        "return_middle_json": "true",
+        "response_format_zip": "true",
+    }
+    timeout = httpx.Timeout(connect=10.0, read=None, write=120.0, pool=10.0)  # read=None: sync parse blocks
+    with open(pdf, "rb") as fh:
+        r = httpx.post(
+            url,
+            data=data,
+            files=[("files", (pdf.name, fh, "application/pdf"))],
+            timeout=timeout,
+            follow_redirects=True,
+        )
+    r.raise_for_status()
+    if not r.content:
+        raise RuntimeError("empty response body from mineru API")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmpzip = out_dir / f".{pdf.stem}.api.zip"
+    tmpzip.write_bytes(r.content)
+    with zipfile.ZipFile(tmpzip) as z:
+        z.extractall(out_dir)  # trusted local server; layout = CLI -o tree
+    tmpzip.unlink(missing_ok=True)
+
+    middle = _find_middle(out_dir)
+    if middle is None:
+        raise RuntimeError("mineru API zip contained no *_middle.json")
+    log(f"  · mineru via API {api_url} → {middle.name}")
+    return middle
+
+
 def run_mineru(
     pdf: Path,
     cache_dir: Path,
@@ -115,6 +166,13 @@ def run_mineru(
     if existing and existing.stat().st_mtime >= pdf.stat().st_mtime:
         log(f"  · mineru cache hit: {existing.name}")
         return existing
+
+    api_url = os.environ.get("MINERU_API_URL")
+    if api_url:  # warm-server fast path; any failure falls through to the CLI below
+        try:
+            return _http_parse_zip(api_url, pdf, out_dir, log)
+        except Exception as e:  # noqa: BLE001 — connection/HTTP/zip error → CLI fallback
+            log(f"  · mineru API at {api_url} failed ({e!r}); falling back to CLI")
 
     bin_argv = find_mineru_bin()
     if bin_argv is None:
