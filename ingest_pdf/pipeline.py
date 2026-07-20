@@ -72,7 +72,10 @@ def run(
         try:
             strat = get_strategy(strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
-            manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf))
+            # Per-PDF provenance model: the strategy's own model if it supplies one
+            # (Question/MinerU), else the VLM (ADR-0006).
+            pdf_model = getattr(strat, "model_id", None) or vlm.model_id
+            manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=pdf_model)
             if strat.name == "outline":
                 outline_targets[pdf_key] = out_root / pdf.stem
             for job in strat.plan(doc, pdf, pdf_key, out_root):
@@ -158,7 +161,14 @@ def run(
                     counters["failed"] += 1
                 continue
             try:
-                ctx = RunContext(dpi, vlm.model_id, vlm.revision, strat.name)
+                # Provenance per Unit follows the strategy's model when it owns
+                # segmentation+transcription (zero-VLM Question), else the VLM.
+                ctx = RunContext(
+                    dpi,
+                    getattr(strat, "model_id", None) or vlm.model_id,
+                    getattr(strat, "revision", None) or vlm.revision,
+                    strat.name,
+                )
                 recs = []
                 for u in strat.emit(rendered, result):
                     md_path = job.out_dir / f"{u.name}.md"
