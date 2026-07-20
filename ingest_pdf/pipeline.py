@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -69,10 +70,17 @@ def run(
         log("no PDFs found.")
         return {"done": 0, "failed": 0, "skipped": 0}
 
-    # ── Plan across all PDFs (each job carries its resolved strategy) ──
+    # ── Plan across all PDFs, in parallel (each job carries its resolved strategy) ──
+    # Parallelism targets the per-PDF MinerU call inside plan() — the batch bottleneck for
+    # the Question strategy. Safe because get_strategy() builds a fresh strategy instance
+    # per PDF (so per-strategy state like _pages never crosses PDFs), ensure_pdf() locks
+    # internally, and per-PDF output dirs / cache dirs are disjoint. With a warm MinerU
+    # server (MINERU_API_URL) the parallel submits overlap against one model load.
     planned: list[tuple] = []  # (job, strat)
     finalize_targets: dict[str, tuple] = {}  # pdf_key -> (strat, out_dir); strategies with a finalize pass
-    for pdf in pdfs:
+    plan_lock = threading.Lock()
+
+    def plan_pdf(pdf: Path) -> None:
         doc = fitz.open(pdf)
         try:
             strat = get_strategy(strategy_name, doc, pdf)
@@ -83,14 +91,25 @@ def run(
             _mid = getattr(strat, "model_id", None) or vlm.model_id
             _mrev = getattr(strat, "revision", None) or vlm.revision
             manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
-            if hasattr(strat, "finalize"):
-                finalize_targets[pdf_key] = (strat, out_root / pdf.stem)
+            local = []
             for job in strat.plan(doc, pdf, pdf_key, out_root):
                 if pages and (job.page_index + 1) not in pages:
                     continue
-                planned.append((job, strat))
+                local.append((job, strat))
+            with plan_lock:
+                planned.extend(local)
+                if hasattr(strat, "finalize"):
+                    finalize_targets[pdf_key] = (strat, out_root / pdf.stem)
         finally:
             doc.close()
+
+    plan_workers = max(1, min(int(os.environ.get("INGEST_PLAN_WORKERS", "3")), len(pdfs)))
+    if plan_workers == 1:
+        for pdf in pdfs:
+            plan_pdf(pdf)
+    else:
+        with ThreadPoolExecutor(max_workers=plan_workers) as ex:
+            list(ex.map(plan_pdf, pdfs))  # realize to surface any per-PDF plan error
 
     todo = [(j, s) for (j, s) in planned if not manifest.page_done(j.pdf_key, j.page_index)]
     skipped = len(planned) - len(todo)
