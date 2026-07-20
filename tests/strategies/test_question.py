@@ -33,21 +33,27 @@ def test_group_gates_preface_and_sections():
     texts0 = "".join(b.text for _, b in qs[0].blocks)
     assert texts0.startswith("1. 已知集合")
     assert "【答案】A" in texts0
-    assert qs[0].answer_start == 2  # the 【答案】 block is the 3rd block of Q1
-    assert qs[1].answer_start is None  # Q2 has no answer marker in this stream
+    assert qs[0].solution_start == 2  # the 【答案】 block is the 3rd block of Q1
+    assert qs[1].solution_start is None  # Q2 has no solution marker in this stream
     assert all(not b.text.startswith("一、") and not b.text.startswith("二、") for q in qs for _, b in q.blocks)
 
 
-def test_group_records_answer_start_at_first_marker():
+def test_group_records_solution_start_at_first_marker():
+    # Q1's solution begins at 【答案】; Q2 has no 【答案】 (MinerU dropped it) so its
+    # solution begins at 【分析】 — both must be recognised as the stem cut point.
     stream = [
         (0, _b("一、选择")),
         (0, _b("1. 题干")),  # 0
         (0, _b("选项行")),  # 1
-        (0, _b("【答案】C")),  # 2  ← answer_start
-        (0, _b("【解析】…")),  # 3  (after answer → not stem)
+        (0, _b("【答案】C")),  # 2  ← solution_start
+        (0, _b("【解析】…")),  # 3  (after the marker → not stem)
+        (0, _b("2. 题干二")),  # 0
+        (0, _b("【分析】直接算")),  # 1  ← solution_start (no 【答案】 present)
+        (0, _b("【详解】…")),  # 2
     ]
     qs = group_questions(stream, log=lambda *_: None)
-    assert qs[0].answer_start == 2
+    assert qs[0].solution_start == 2
+    assert qs[1].solution_start == 1
 
 
 def test_group_merged_block_fallback_and_no_period_header():
@@ -100,6 +106,22 @@ def test_build_frags_no_answer_means_no_stem():
     )
     frags = _build_frags(qs)
     assert [(f.number, f.variant) for f in frags[0]] == [(1, "full")]
+
+
+def test_build_frags_stem_when_only_analysis_marker():
+    # 【答案】 missing, solution starts at 【分析】 → stem = the header block only.
+    qs = group_questions(
+        [
+            (0, _b("一、选择")),
+            (0, _b("1. 题干", bbox=(50, 80, 350, 100))),
+            (0, _b("【分析】…", bbox=(50, 120, 350, 140))),
+            (0, _b("【详解】…", bbox=(50, 160, 350, 180))),
+        ],
+        log=lambda *_: None,
+    )
+    frags = _build_frags(qs)
+    assert [(f.number, f.variant) for f in frags[0]] == [(1, "full"), (1, "stem")]
+    assert frags[0][1].box_pt == (50, 80, 350, 100)  # stem stops above 【分析】
 
 
 # ── emit: scale pt→px, snap, crop, write PNG (synthetic page, no MinerU) ─────────

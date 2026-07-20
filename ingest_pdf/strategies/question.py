@@ -6,9 +6,10 @@ per-page fragment from the full-page render (box snapped to the nearest blank ba
 Cross-page questions are reassembled by finalize().
 
 Each question yields **two** Units (two images): the full question (stem + options +
-【答案】 + 解析) and the **stem** (cut just above the first 【答案】 block). The stem
-variant is only emitted when the question actually has an answer marker — otherwise the
-"without-answer" image would equal the full one, so it is skipped.
+solution) and the **stem** (cut just above the first solution marker — 【答案】, or
+【解析】/【分析】/【详解】 when 【答案】 was not recognised). The stem variant is only
+emitted when the question actually has a solution marker — otherwise the "without-solution"
+image would equal the full one, so it is skipped.
 
 Grouping is hardened against the failure the spike hit on a full 解析版 (missed Q11
 because the model merged its header into the previous question's tail block): a question
@@ -37,19 +38,21 @@ _SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、")
 _HEADER_RE = re.compile(r"^(\d{1,2})\s*[.．、]?\s")
 # Same number appearing after whitespace/newline *inside* a merged block (fallback).
 _MERGED_RE = re.compile(r"(?:^|[\s\n])(\d{1,2})\s*[.．、]\s")
-# The answer marker that separates the stem from the worked solution.
-_ANSWER_RE = re.compile(r"【答案】")
+# A solution-section marker. The stem ends just before the first of these. 【答案】 is the
+# usual one, but MinerU sometimes drops it (observed: a question whose first solution block
+# is 【分析】), so we also cut on 【解析】/【分析】/【详解】 — whichever comes first.
+_SOLUTION_RE = re.compile(r"【(?:答案|解析|分析|详解)】")
 
 
 @dataclass
 class _Question:
     number: int
     blocks: list[tuple[int, MBlock]] = field(default_factory=list)  # (page_index, block)
-    answer_start: int | None = None  # index into blocks of the first 【答案】 block, else None
+    solution_start: int | None = None  # index into blocks of the first solution marker, else None
 
 
-def _is_answer(b: MBlock) -> bool:
-    return bool(_ANSWER_RE.search(b.text))
+def _is_solution(b: MBlock) -> bool:
+    return bool(_SOLUTION_RE.search(b.text))
 
 
 def _block_text_stripped(b: MBlock) -> str:
@@ -83,8 +86,8 @@ def group_questions(stream: list[tuple[int, MBlock]], log=print) -> list[_Questi
         if head is None:
             if questions:
                 cur = questions[-1]
-                if cur.answer_start is None and _is_answer(b):
-                    cur.answer_start = len(cur.blocks)
+                if cur.solution_start is None and _is_solution(b):
+                    cur.solution_start = len(cur.blocks)
                 cur.blocks.append((pi, b))
             continue
 
@@ -123,21 +126,21 @@ def _union_pt(blocks: list[MBlock]) -> tuple[float, float, float, float]:
 
 def _build_frags(questions: list[_Question]) -> dict[int, list[_Frag]]:
     """questions → {page_index: [_Frag …]}; each question emits a full frag per page it
-    touches and a stem frag per page that has pre-answer blocks (stem only if the
-    question has an answer marker at all)."""
+    touches and a stem frag per page that has pre-solution blocks (stem only if the
+    question has a solution marker at all)."""
     pages: dict[int, list[_Frag]] = {}
     for q in questions:
         full_by_page: dict[int, list[MBlock]] = {}
         stem_by_page: dict[int, list[MBlock]] = {}
         for i, (pi, b) in enumerate(q.blocks):
             full_by_page.setdefault(pi, []).append(b)
-            if q.answer_start is not None and i < q.answer_start:
+            if q.solution_start is not None and i < q.solution_start:
                 stem_by_page.setdefault(pi, []).append(b)
         for pi in sorted(full_by_page):
             pages.setdefault(pi, []).append(
                 _Frag(q.number, pi, _union_pt(full_by_page[pi]), "".join(b.text for b in full_by_page[pi]), "full")
             )
-            if q.answer_start is not None and stem_by_page.get(pi):
+            if q.solution_start is not None and stem_by_page.get(pi):
                 sb = stem_by_page[pi]
                 pages[pi].append(_Frag(q.number, pi, _union_pt(sb), "".join(b.text for b in sb), "stem"))
     return pages
@@ -200,7 +203,7 @@ class QuestionStrategy:
         units: list[OutUnit] = []
         for f in frags:
             box_px = (f.box_pt[0] * zoom, f.box_pt[1] * zoom, f.box_pt[2] * zoom, f.box_pt[3] * zoom)
-            # stem bottom is the cut above 【答案】 → don't snap it downward into the answer
+            # stem bottom is the cut just above the solution → don't snap it downward into it
             snapped = _crop.snap(box_px, blank, snap_bottom=(f.variant != "stem"))
             if snapped[3] <= snapped[1]:
                 continue
