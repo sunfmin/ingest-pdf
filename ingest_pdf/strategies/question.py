@@ -1,9 +1,14 @@
 """Question Strategy (CONTEXT / ADR-0006): split an exam paper into per-question Units.
 
-Segmentation + transcription both come from MinerU (zero VLM on this path). plan()
-runs MinerU once per PDF and groups its paragraph blocks into questions; emit() crops
-each per-page fragment of a question from the full-page render (box snapped to the
-nearest blank band). Cross-page questions are reassembled by finalize() (stage 5).
+Segmentation + transcription both come from MinerU (zero VLM on this path). plan() runs
+MinerU once per PDF and groups its paragraph blocks into questions; emit() crops each
+per-page fragment from the full-page render (box snapped to the nearest blank band).
+Cross-page questions are reassembled by finalize().
+
+Each question yields **two** Units (two images): the full question (stem + options +
+【答案】 + 解析) and the **stem** (cut just above the first 【答案】 block). The stem
+variant is only emitted when the question actually has an answer marker — otherwise the
+"without-answer" image would equal the full one, so it is skipped.
 
 Grouping is hardened against the failure the spike hit on a full 解析版 (missed Q11
 because the model merged its header into the previous question's tail block): a question
@@ -32,12 +37,19 @@ _SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、")
 _HEADER_RE = re.compile(r"^(\d{1,2})\s*[.．、]?\s")
 # Same number appearing after whitespace/newline *inside* a merged block (fallback).
 _MERGED_RE = re.compile(r"(?:^|[\s\n])(\d{1,2})\s*[.．、]\s")
+# The answer marker that separates the stem from the worked solution.
+_ANSWER_RE = re.compile(r"【答案】")
 
 
 @dataclass
 class _Question:
     number: int
     blocks: list[tuple[int, MBlock]] = field(default_factory=list)  # (page_index, block)
+    answer_start: int | None = None  # index into blocks of the first 【答案】 block, else None
+
+
+def _is_answer(b: MBlock) -> bool:
+    return bool(_ANSWER_RE.search(b.text))
 
 
 def _block_text_stripped(b: MBlock) -> str:
@@ -70,7 +82,10 @@ def group_questions(stream: list[tuple[int, MBlock]], log=print) -> list[_Questi
 
         if head is None:
             if questions:
-                questions[-1].blocks.append((pi, b))
+                cur = questions[-1]
+                if cur.answer_start is None and _is_answer(b):
+                    cur.answer_start = len(cur.blocks)
+                cur.blocks.append((pi, b))
             continue
 
         if head == expected:
@@ -89,12 +104,13 @@ def group_questions(stream: list[tuple[int, MBlock]], log=print) -> list[_Questi
 
 @dataclass
 class _Frag:
-    """One per-page fragment of a question (assembled into a Unit by emit/finalize)."""
+    """One per-page fragment of a question variant (assembled into a Unit by finalize)."""
 
     number: int
     page: int
     box_pt: tuple[float, float, float, float]
     text: str
+    variant: str  # "full" or "stem"
 
 
 def _union_pt(blocks: list[MBlock]) -> tuple[float, float, float, float]:
@@ -106,23 +122,24 @@ def _union_pt(blocks: list[MBlock]) -> tuple[float, float, float, float]:
 
 
 def _build_frags(questions: list[_Question]) -> dict[int, list[_Frag]]:
-    """questions → {page_index: [_Frag …]} preserving question order within a page."""
+    """questions → {page_index: [_Frag …]}; each question emits a full frag per page it
+    touches and a stem frag per page that has pre-answer blocks (stem only if the
+    question has an answer marker at all)."""
     pages: dict[int, list[_Frag]] = {}
     for q in questions:
-        # group this question's blocks by page, keeping reading order
-        by_page: dict[int, list[MBlock]] = {}
-        for pi, b in q.blocks:
-            by_page.setdefault(pi, []).append(b)
-        for pi in sorted(by_page):
-            pblocks = by_page[pi]
+        full_by_page: dict[int, list[MBlock]] = {}
+        stem_by_page: dict[int, list[MBlock]] = {}
+        for i, (pi, b) in enumerate(q.blocks):
+            full_by_page.setdefault(pi, []).append(b)
+            if q.answer_start is not None and i < q.answer_start:
+                stem_by_page.setdefault(pi, []).append(b)
+        for pi in sorted(full_by_page):
             pages.setdefault(pi, []).append(
-                _Frag(
-                    number=q.number,
-                    page=pi,
-                    box_pt=_union_pt(pblocks),
-                    text="".join(b.text for b in pblocks),
-                )
+                _Frag(q.number, pi, _union_pt(full_by_page[pi]), "".join(b.text for b in full_by_page[pi]), "full")
             )
+            if q.answer_start is not None and stem_by_page.get(pi):
+                sb = stem_by_page[pi]
+                pages[pi].append(_Frag(q.number, pi, _union_pt(sb), "".join(b.text for b in sb), "stem"))
     return pages
 
 
@@ -132,6 +149,11 @@ def _page_width_pt(pdf_path: Path, page_index: int) -> float:
         return float(doc[page_index].rect.width)
     finally:
         doc.close()
+
+
+def _frag_name(number: int, page_index: int, variant: str) -> str:
+    suffix = "-stem" if variant == "stem" else ""
+    return f"q{number:02d}{suffix}__p{page_index + 1:04d}"
 
 
 class QuestionStrategy:
@@ -178,9 +200,12 @@ class QuestionStrategy:
         units: list[OutUnit] = []
         for f in frags:
             box_px = (f.box_pt[0] * zoom, f.box_pt[1] * zoom, f.box_pt[2] * zoom, f.box_pt[3] * zoom)
-            snapped = _crop.snap(box_px, blank)
+            # stem bottom is the cut above 【答案】 → don't snap it downward into the answer
+            snapped = _crop.snap(box_px, blank, snap_bottom=(f.variant != "stem"))
+            if snapped[3] <= snapped[1]:
+                continue
             crop = _crop.crop_box(full, snapped)
-            name = f"q{f.number:02d}__p{rendered.job.page_index + 1:04d}"
+            name = _frag_name(f.number, rendered.job.page_index, f.variant)
             image_name = f"{name}.png"
             (rendered.job.out_dir / image_name).write_bytes(_crop.png_bytes(crop))
             units.append(
@@ -197,8 +222,8 @@ class QuestionStrategy:
 
 # ── cross-page assembly (finalize) ──────────────────────────────────────────────
 
-_FRAG_NAME = re.compile(r"^q(\d+)__p\d+$")  # per-page fragment, e.g. q02__p0002
-_FINAL_NAME = re.compile(r"^q(\d+)$")  # assembled question, e.g. q02
+_FRAG_RE = re.compile(r"^q(\d+)(-stem)?__p\d+$")
+_FINAL_RE = re.compile(r"^q(\d+)(-stem)?$")
 
 
 def _strip_header(md: str) -> str:
@@ -210,17 +235,21 @@ def _strip_header(md: str) -> str:
 
 
 def _qnum(name: str) -> int | None:
-    m = _FRAG_NAME.match(name) or _FINAL_NAME.match(name)
+    m = _FRAG_RE.match(name) or _FINAL_RE.match(name)
     return int(m.group(1)) if m else None
 
 
+def _is_stem(name: str) -> bool:
+    return "-stem" in name
+
+
 def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
-    """Assemble per-page fragments into one Unit per question (cross-page concat).
+    """Assemble per-page fragments into one Unit per (question, variant).
 
     Idempotent + resume-safe (mirrors outline.finalize, ADR-0004): only fragment-named
-    Units (qNN__pPPPP) are merged; already-assembled qNN Units are left untouched, so a
-    re-run after finalize is a no-op. The merged Unit is recorded under its first page;
-    fragment image/md files and the intermediate .renders/ are removed.
+    Units (qNN[-stem]__pPPPP) are merged; already-assembled qNN / qNN-stem are left
+    untouched, so a re-run after finalize is a no-op. Each merged Unit is recorded under
+    its first page; fragment image/md files and the intermediate .renders/ are removed.
     """
     import shutil
 
@@ -233,21 +262,21 @@ def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
     pdf_name = Path(pdf_key).name
 
     page_idxs = sorted(int(k) for k, v in rec["pages"].items() if v.get("status") == "done")
-    groups: dict[int, list[tuple[int, dict]]] = {}
+    groups: dict[tuple[int, str], list[tuple[int, dict]]] = {}
     for pi in page_idxs:
         for u in rec["pages"][str(pi)].get("units") or []:
-            if _FRAG_NAME.match(u["name"]):
-                groups.setdefault(_qnum(u["name"]), []).append((pi, u))
+            if _FRAG_RE.match(u["name"]):
+                key = (_qnum(u["name"]), "stem" if _is_stem(u["name"]) else "full")
+                groups.setdefault(key, []).append((pi, u))
 
-    # per-page unit lists with fragments stripped (final Units kept as-is)
     new_units: dict[int, list[dict]] = {
-        pi: [u for u in (rec["pages"][str(pi)].get("units") or []) if not _FRAG_NAME.match(u["name"])]
+        pi: [u for u in (rec["pages"][str(pi)].get("units") or []) if not _FRAG_RE.match(u["name"])]
         for pi in page_idxs
     }
 
     merged = 0
-    for qnum in sorted(groups):
-        frags = groups[qnum]
+    for (qnum, variant) in sorted(groups):
+        frags = groups[(qnum, variant)]
         first_pi = frags[0][0]
         pngs, bodies, pages = [], [], []
         for pi, u in frags:
@@ -258,14 +287,14 @@ def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
             if p_md.exists():
                 bodies.append(_strip_header(p_md.read_text("utf-8")))
             pages.append(pi + 1)
-        canon = f"q{qnum:02d}"
+        canon = f"q{qnum:02d}" + ("-stem" if variant == "stem" else "")
         if pngs:
             (out_dir / f"{canon}.png").write_bytes(_crop.concat_vertical(pngs))
         (out_dir / f"{canon}.md").write_text(
             provenance.merged_header(model, dpi, strategy, pdf_name, pages) + "\n\n".join(bodies),
             "utf-8",
         )
-        for _, u in frags:  # delete fragment files
+        for _, u in frags:
             for key in ("image", "md"):
                 fp = out_dir / u[key]
                 if fp.exists():
@@ -283,8 +312,8 @@ def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
         shutil.rmtree(renders, ignore_errors=True)
     manifest.save()
     log(
-        f"  ✓ question finalize {out_dir.name}: {merged} question(s) assembled "
-        f"(cross-page merged where needed); fragments + .renders cleaned"
+        f"  ✓ question finalize {out_dir.name}: {merged} unit(s) assembled "
+        f"(full + stem, cross-page merged where needed); fragments + .renders cleaned"
     )
 
 

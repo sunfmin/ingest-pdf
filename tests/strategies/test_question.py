@@ -1,4 +1,4 @@
-"""Question strategy grouping + emit (ADR-0006, stage 3). No MinerU subprocess."""
+"""Question strategy grouping + emit (ADR-0006). Full + stem variants. No MinerU subprocess."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import fitz
 from PIL import Image
 
 from ingest_pdf.models import PageJob, PageResult, RenderedPage
-from ingest_pdf.strategies import _crop
 from ingest_pdf.strategies._mineru import MBlock
 from ingest_pdf.strategies.question import QuestionStrategy, _build_frags, group_questions
 
@@ -34,12 +33,24 @@ def test_group_gates_preface_and_sections():
     texts0 = "".join(b.text for _, b in qs[0].blocks)
     assert texts0.startswith("1. 已知集合")
     assert "【答案】A" in texts0
-    assert all(not t.startswith("答题前") for q in qs for _, b in q.blocks for t in [b.text])
+    assert qs[0].answer_start == 2  # the 【答案】 block is the 3rd block of Q1
+    assert qs[1].answer_start is None  # Q2 has no answer marker in this stream
     assert all(not b.text.startswith("一、") and not b.text.startswith("二、") for q in qs for _, b in q.blocks)
 
 
+def test_group_records_answer_start_at_first_marker():
+    stream = [
+        (0, _b("一、选择")),
+        (0, _b("1. 题干")),  # 0
+        (0, _b("选项行")),  # 1
+        (0, _b("【答案】C")),  # 2  ← answer_start
+        (0, _b("【解析】…")),  # 3  (after answer → not stem)
+    ]
+    qs = group_questions(stream, log=lambda *_: None)
+    assert qs[0].answer_start == 2
+
+
 def test_group_merged_block_fallback_and_no_period_header():
-    # Q3's header is merged into Q2's tail block; Q4 has no trailing period ("4 已知").
     stream = [
         (0, _b("一、选择题")),
         (0, _b("1. 第一题")),
@@ -50,8 +61,8 @@ def test_group_merged_block_fallback_and_no_period_header():
     ]
     qs = group_questions(stream, log=lambda *_: None)
     assert [q.number for q in qs] == [1, 2, 3, 4]
-    assert qs[2].blocks[0][1].text.startswith("故选 B.")  # merged block becomes Q3's first block
-    assert qs[3].blocks[-1][1].text == "3. 由上可知 …"  # stray number attached as body, not a new Q
+    assert qs[2].blocks[0][1].text.startswith("故选 B.")
+    assert qs[3].blocks[-1][1].text == "3. 由上可知 …"
 
 
 def test_group_no_section_starts_at_first_header():
@@ -60,22 +71,35 @@ def test_group_no_section_starts_at_first_header():
     assert [q.number for q in qs] == [1, 2]
 
 
-def test_build_frags_splits_cross_page_question():
+def test_build_frags_emits_full_and_stem_per_page():
     qs = group_questions(
         [
             (0, _b("一、选择")),
-            (0, _b("1. 题干", bbox=(50, 100, 400, 120))),
-            (0, _b("续行", bbox=(50, 130, 300, 150))),
-            (1, _b("跨页续", bbox=(50, 40, 350, 70))),
+            (0, _b("1. 题干一", bbox=(50, 80, 350, 100))),
+            (0, _b("【答案】A", bbox=(50, 120, 350, 140))),
+            (0, _b("2. 题干二起", bbox=(50, 160, 350, 180))),  # cross-page, no answer on p0
+            (1, _b("题干二续", bbox=(50, 40, 350, 60))),
+            (1, _b("【答案】B", bbox=(50, 80, 350, 100))),
         ],
         log=lambda *_: None,
     )
     frags = _build_frags(qs)
-    assert sorted(frags) == [0, 1]
-    assert len(frags[0]) == 1 and frags[0][0].number == 1
-    assert frags[0][0].box_pt == (50, 100, 400, 150)  # union of page-0 blocks
-    assert frags[1][0].box_pt == (50, 40, 350, 70)
-    assert "跨页续" in frags[1][0].text and "续行" not in frags[1][0].text
+    variants0 = [(f.number, f.variant) for f in frags[0]]
+    variants1 = [(f.number, f.variant) for f in frags[1]]
+    assert variants0 == [(1, "full"), (1, "stem"), (2, "full"), (2, "stem")]
+    assert variants1 == [(2, "full"), (2, "stem")]
+    # Q1 stem = header only (the 【答案】 block is excluded); Q2 stem on p1 = cont only (not the answer)
+    assert frags[0][1].box_pt == (50, 80, 350, 100)
+    assert frags[1][1].box_pt == (50, 40, 350, 60)
+
+
+def test_build_frags_no_answer_means_no_stem():
+    qs = group_questions(
+        [(0, _b("一、选择")), (0, _b("1. 题干", bbox=(50, 80, 350, 100))), (0, _b("续", bbox=(50, 120, 350, 140)))],
+        log=lambda *_: None,
+    )
+    frags = _build_frags(qs)
+    assert [(f.number, f.variant) for f in frags[0]] == [(1, "full")]
 
 
 # ── emit: scale pt→px, snap, crop, write PNG (synthetic page, no MinerU) ─────────
@@ -97,28 +121,31 @@ def _make_pdf_and_render(tmp_path: Path, page_pt=(400, 500), zoom=2.0):
     return rendered
 
 
-def test_emit_crops_one_fragment_per_question(tmp_path):
+def _frag(number, page, box_pt, text, variant="full"):
+    from ingest_pdf.strategies.question import _Frag
+
+    return _Frag(number=number, page=page, box_pt=box_pt, text=text, variant=variant)
+
+
+def test_emit_writes_full_and_stem_fragments(tmp_path):
     s = QuestionStrategy()
-    s._pages = {0: [_frag(1, 0, (50, 100, 300, 200), "1. hi")]}
-    rendered = _make_pdf_and_render(tmp_path)  # zoom 2.0 → box_px (100,200,600,400)
+    s._pages = {
+        0: [
+            _frag(1, 0, (50, 100, 300, 200), "1. hi full", "full"),
+            _frag(1, 0, (50, 100, 300, 150), "1. hi stem", "stem"),
+        ]
+    }
+    rendered = _make_pdf_and_render(tmp_path)  # zoom 2.0
 
     units = s.emit(rendered, PageResult(markdown="", questions=[]))
 
-    assert len(units) == 1
-    u = units[0]
-    assert u.name == "q01__p0001"
-    assert u.md_body == "1. hi"
-    assert u.source_page == 1
-    img_path = rendered.job.out_dir / u.image_name
-    assert img_path.exists()
-    assert img_path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
-    # white page ⇒ every row blank ⇒ snap is a no-op ⇒ box == scaled pt box
-    assert u.box == (100, 200, 600, 400)
-    # and the crop dimensions match that box
-    assert Image.open(img_path).size == (500, 200)
-
-
-def _frag(number, page, box_pt, text):
-    from ingest_pdf.strategies.question import _Frag
-
-    return _Frag(number=number, page=page, box_pt=box_pt, text=text)
+    names = sorted(u.name for u in units)
+    assert names == ["q01-stem__p0001", "q01__p0001"]
+    for u in units:
+        img_path = rendered.job.out_dir / u.image_name
+        assert img_path.exists() and img_path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    # white page ⇒ snap is a no-op ⇒ boxes equal the scaled pt boxes
+    by_name = {u.name: u for u in units}
+    assert by_name["q01__p0001"].box == (100, 200, 600, 400)
+    assert by_name["q01-stem__p0001"].box == (100, 200, 600, 300)
+    assert by_name["q01-stem__p0001"].md_body == "1. hi stem"

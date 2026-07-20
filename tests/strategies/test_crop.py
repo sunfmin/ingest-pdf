@@ -61,3 +61,14 @@ def test_concat_vertical_stacks_and_pads():
     b = _crop.png_bytes(Image.new("RGB", (4, 6), (0, 255, 0)))
     out = Image.open(__import__("io").BytesIO(_crop.concat_vertical([a, b])))
     assert out.size == (8, 10)  # width = max, height = sum
+
+
+def test_snap_bottom_disabled_does_not_cross_into_next_band():
+    # dark band sits immediately below the box with no blank gap: a downward snap would
+    # cross it; snap_bottom=False must keep the bottom edge put (the stem cut).
+    im = _img_with_bands(50, 200, [(60, 80)])
+    blank = _crop.blank_rows(im)
+    _, _, _, bot_on = _crop.snap((5, 40, 45, 60), blank, search=40, snap_bottom=True)
+    _, _, _, bot_off = _crop.snap((5, 40, 45, 60), blank, search=40, snap_bottom=False)
+    assert bot_off == 60  # unchanged
+    assert bot_on == 81  # crossed the band to the next blank row

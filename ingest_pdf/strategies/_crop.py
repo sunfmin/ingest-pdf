@@ -31,11 +31,15 @@ def blank_rows(gray: Image.Image, thresh: int = _BLANK_THRESH) -> list[bool]:
     return out
 
 
-def snap(box: Box, blank: list[bool], search: int = 60) -> tuple[int, int, int, int]:
+def snap(box: Box, blank: list[bool], search: int = 60, snap_bottom: bool = True) -> tuple[int, int, int, int]:
     """Expand box top/bottom to the nearest blank row within `search` px (clamped).
 
     If the edge row is already blank it stays put; if no blank row is found within
     the window the original edge is kept (never clip harder than the model's box).
+
+    `snap_bottom=False` keeps the bottom edge as-is (only the top snaps) — used for the
+    stem (no-answer) crop, whose bottom is the cut just above 【答案】: searching downward
+    there could otherwise cross a missing blank gap and swallow the answer line.
     """
     x0, y0, x1, y1 = box
     h = len(blank)
@@ -48,11 +52,14 @@ def snap(box: Box, blank: list[bool], search: int = 60) -> tuple[int, int, int, 
             top = y
             break
 
-    bot = yi1
-    for y in range(max(0, min(yi1, h - 1)), min(h, yi1 + search)):
-        if blank[y]:
-            bot = y
-            break
+    if snap_bottom:
+        bot = yi1
+        for y in range(max(0, min(yi1, h - 1)), min(h, yi1 + search)):
+            if blank[y]:
+                bot = y
+                break
+    else:
+        bot = yi1
 
     if bot <= top:  # degenerate window — fall back to the un-snapped box
         top, bot = yi0, yi1
