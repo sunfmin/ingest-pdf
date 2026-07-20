@@ -25,7 +25,7 @@ def parse_pages(spec: Optional[str]) -> Optional[set[int]]:
     return out or None
 
 
-def _make_vlm(args):
+def _make_vlm(args: argparse.Namespace):
     """Build the VLM worker per flags. Question strategy ⇒ NoVLM (no vlm extra needed)."""
     if args.stub:
         from .vlm.worker import StubVLM
@@ -65,7 +65,7 @@ def _inspect_estimate(name: str, doc) -> object:
     return doc.page_count
 
 
-def run_inspect(args) -> int:
+def run_inspect(args: argparse.Namespace) -> int:
     """Print a per-PDF structure probe as JSON (no MinerU, no VLM) — the skill's
     'analyze structure + design directory' step, done cheaply by the tool."""
     import json

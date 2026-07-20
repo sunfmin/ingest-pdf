@@ -29,6 +29,15 @@ import fitz
 from ..models import OutUnit, PageJob, PageResult, RenderedPage
 
 
+def strip_header(md: str) -> str:
+    """Drop the leading provenance <!-- … --> comment."""
+    if md.startswith("<!--"):
+        end = md.find("-->")
+        if end != -1:
+            return md[end + 3 :].lstrip()
+    return md
+
+
 class Strategy(Protocol):
     name: str
 

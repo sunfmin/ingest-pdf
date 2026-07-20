@@ -15,8 +15,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from .base import strip_header
 from .page import PageStrategy
+
+if TYPE_CHECKING:
+    from ..manifest import Manifest
 
 # A section heading = a markdown heading whose text starts with N.N or N.N.N.
 # (Only heading lines count — this ignores stray section-like numbers in body text.)
@@ -29,15 +34,6 @@ class OutlineStrategy(PageStrategy):
     runs `finalize()` on the output dir afterwards to build the chapter/section tree."""
 
     name = "outline"
-
-
-def _strip_header(md: str) -> str:
-    """Drop the leading provenance <!-- … --> comment."""
-    if md.startswith("<!--"):
-        end = md.find("-->")
-        if end != -1:
-            return md[end + 3 :].lstrip()
-    return md
 
 
 def section_of_page(md_body: str) -> tuple[int, str, str] | None:
@@ -67,7 +63,7 @@ def _target_rel(cur: tuple[int, str, str] | None, unit_name: str) -> str:
     return f"第{chapter}章/{section_dir}/{unit_name}"
 
 
-def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
+def finalize(out_dir: Path, manifest: "Manifest", pdf_key: str, log=print) -> None:
     """Reorganize a PDF's flat page-NNNN pairs into a 第N章/<section>/ tree.
 
     Idempotent + resume-safe: reads every done page's markdown in order (from its
@@ -92,7 +88,7 @@ def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
             log(f"  ! outline finalize: missing {md_path.name}; skipping p{idx + 1}")
             continue
 
-        h = section_of_page(_strip_header(md_path.read_text("utf-8")))
+        h = section_of_page(strip_header(md_path.read_text("utf-8")))
         if h:
             cur = h
         new_stem = _target_rel(cur, u["name"])

@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import fitz
 from PIL import Image
@@ -31,6 +32,10 @@ from .. import provenance
 from ..models import OutUnit, PageJob, PageResult, RenderedPage
 from . import _crop, _mineru
 from ._mineru import MBlock
+from .base import strip_header
+
+if TYPE_CHECKING:
+    from ..manifest import Manifest
 
 # A 大题头 section header: "一、选择题 …". Used as the gating sentinel.
 _SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、")
@@ -146,14 +151,6 @@ def _build_frags(questions: list[_Question]) -> dict[int, list[_Frag]]:
     return pages
 
 
-def _page_width_pt(pdf_path: Path, page_index: int) -> float:
-    doc = fitz.open(pdf_path)
-    try:
-        return float(doc[page_index].rect.width)
-    finally:
-        doc.close()
-
-
 def _frag_name(number: int, page_index: int, variant: str) -> str:
     suffix = "-stem" if variant == "stem" else ""
     return f"q{number:02d}{suffix}__p{page_index + 1:04d}"
@@ -170,6 +167,7 @@ class QuestionStrategy:
         self.model_id = mid
         self.revision = rev
         self._pages: dict[int, list[_Frag]] = {}
+        self._page_width: dict[int, float] = {}  # cache: page_index → width in points
 
     # ── Strategy protocol ────────────────────────────────────────────────────────
 
@@ -180,6 +178,8 @@ class QuestionStrategy:
         stream = [(pi, b) for pi in sorted(per_page) for b in per_page[pi]]
         questions = group_questions(stream)
         self._pages = _build_frags(questions)
+        # Cache page widths from the already-open doc (avoid per-emit fitz.open, nit #2)
+        self._page_width = {pi: float(doc[pi].rect.width) for pi in self._pages}
         out_dir = out_root / pdf_path.stem
         return [
             PageJob(pdf_path=pdf_path, pdf_key=pdf_key, page_index=pi, out_dir=out_dir)
@@ -190,12 +190,26 @@ class QuestionStrategy:
     def render_target(self, job: PageJob) -> Path:
         return job.out_dir / ".renders" / f"page-{job.page_index + 1:04d}.png"
 
+    def _page_width_pt(self, pdf_path: Path, page_index: int) -> float:
+        """Memoized page width (pt). plan() warms the cache from the already-open doc,
+        so in the pipeline this never reopens the PDF; the cold-open fallback only fires
+        when emit() is driven without plan() (e.g. unit tests)."""
+        w = self._page_width.get(page_index)
+        if w is None:
+            doc = fitz.open(pdf_path)
+            try:
+                w = float(doc[page_index].rect.width)
+            finally:
+                doc.close()
+            self._page_width[page_index] = w
+        return w
+
     def emit(self, rendered: RenderedPage, result: PageResult) -> list[OutUnit]:
         frags = self._pages.get(rendered.job.page_index, [])
         if not frags:
             return []
 
-        zoom = rendered.width / _page_width_pt(rendered.job.pdf_path, rendered.job.page_index)
+        zoom = rendered.width / self._page_width_pt(rendered.job.pdf_path, rendered.job.page_index)
         full = Image.open(rendered.png_path).convert("RGB")
         gray = full.convert("L")
         blank = _crop.blank_rows(gray)
@@ -229,14 +243,6 @@ _FRAG_RE = re.compile(r"^q(\d+)(-stem)?__p\d+$")
 _FINAL_RE = re.compile(r"^q(\d+)(-stem)?$")
 
 
-def _strip_header(md: str) -> str:
-    if md.startswith("<!--"):
-        end = md.find("-->")
-        if end != -1:
-            return md[end + 3 :].lstrip()
-    return md
-
-
 def _qnum(name: str) -> int | None:
     m = _FRAG_RE.match(name) or _FINAL_RE.match(name)
     return int(m.group(1)) if m else None
@@ -246,7 +252,7 @@ def _is_stem(name: str) -> bool:
     return "-stem" in name
 
 
-def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
+def finalize(out_dir: Path, manifest: "Manifest", pdf_key: str, log=print) -> None:
     """Assemble per-page fragments into one Unit per (question, variant).
 
     Idempotent + resume-safe (mirrors outline.finalize, ADR-0004): only fragment-named
@@ -288,7 +294,7 @@ def finalize(out_dir: Path, manifest, pdf_key: str, log=print) -> None:
                 pngs.append(p_png.read_bytes())
             p_md = out_dir / u["md"]
             if p_md.exists():
-                bodies.append(_strip_header(p_md.read_text("utf-8")))
+                bodies.append(strip_header(p_md.read_text("utf-8")))
             pages.append(pi + 1)
         canon = f"q{qnum:02d}" + ("-stem" if variant == "stem" else "")
         if pngs:
