@@ -29,7 +29,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         prog="ingest",
         description="Digest PDFs into a structured tree of (image, transcription) Units.",
     )
-    ap.add_argument("inputs", nargs="+", help="PDF files or directories (recursed for *.pdf)")
+    ap.add_argument("inputs", nargs="*", help="PDF files or directories (recursed for *.pdf)")
+    ap.add_argument(
+        "--install-mineru",
+        action="store_true",
+        help="one-time setup: build the isolated MinerU venv + download models (ADR-0006); then exit",
+    )
     ap.add_argument("--out", required=True, help="output root directory")
     ap.add_argument(
         "--strategy",
@@ -46,6 +51,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--repetition-penalty", type=float, default=1.05, help="repetition penalty")
     ap.add_argument("--max-tokens", type=int, default=4096, help="max output tokens per page")
     args = ap.parse_args(argv)
+
+    if args.install_mineru:
+        from .strategies._mineru import install_mineru
+
+        install_mineru()
+        return 0
+
+    if not args.inputs:
+        ap.error("the following arguments are required: inputs (or pass --install-mineru)")
 
     from .pipeline import run
 

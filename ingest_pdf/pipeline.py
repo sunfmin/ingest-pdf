@@ -72,10 +72,12 @@ def run(
         try:
             strat = get_strategy(strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
-            # Per-PDF provenance model: the strategy's own model if it supplies one
-            # (Question/MinerU), else the VLM (ADR-0006).
-            pdf_model = getattr(strat, "model_id", None) or vlm.model_id
-            manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=pdf_model)
+            # Per-PDF provenance model = "id@revision": the strategy's own model when
+            # it owns segmentation+transcription (Question/MinerU), else the VLM
+            # (ADR-0006). Including the revision makes a model upgrade invalidate pages.
+            _mid = getattr(strat, "model_id", None) or vlm.model_id
+            _mrev = getattr(strat, "revision", None) or vlm.revision
+            manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
             if strat.name == "outline":
                 outline_targets[pdf_key] = out_root / pdf.stem
             for job in strat.plan(doc, pdf, pdf_key, out_root):
