@@ -258,3 +258,41 @@ def test_run_mineru_api_failure_falls_back_to_cli(monkeypatch, tmp_path):
     middle = mu.run_mineru(pdf, cache, log=lambda *_: None)
     run_mock.assert_called_once()  # API connect failed → CLI ran
     assert middle.exists()
+
+
+# ── install-mineru: the one-time setup command shape ─────────────────────────────
+
+
+def test_install_mineru_builds_venv_and_downloads_models(monkeypatch, tmp_path):
+    monkeypatch.setattr(mu, "MINERU_BIN_PATH", tmp_path / "nope")  # ⇒ venv+pip branch runs
+    monkeypatch.setattr(mu, "MINERU_VENV", tmp_path / "venv")
+    monkeypatch.setattr(mu, "MINERU_CONFIG_PATH", tmp_path / "mineru.json")
+    monkeypatch.setattr("shutil.which", lambda *_: "/fake/uv")
+    recorder = Mock()
+    monkeypatch.setattr("subprocess.run", recorder)
+
+    mu.install_mineru(log=lambda *_: None)
+
+    cmds = [c.args[0] for c in recorder.call_args_list]
+    assert cmds[0][:3] == ["/fake/uv", "venv", str(tmp_path / "venv")] and "--python" in cmds[0]
+    assert cmds[1][1] == "pip" and "mineru[all]" in cmds[1] and mu._PIP_INDEX in cmds[1]
+    assert "mineru-models-download" in cmds[2][0] and "-s" in cmds[2] and "modelscope" in cmds[2]
+    # models-download carries the modelscope config so models come from the CN mirror
+    assert recorder.call_args_list[2].kwargs["env"]["MINERU_TOOLS_CONFIG_JSON"] == str(tmp_path / "mineru.json")
+
+
+def test_install_mineru_skips_venv_when_present(monkeypatch, tmp_path):
+    fake_bin = tmp_path / "venv" / "bin" / "mineru"
+    fake_bin.parent.mkdir(parents=True)
+    fake_bin.write_text("")
+    monkeypatch.setattr(mu, "MINERU_BIN_PATH", fake_bin)
+    monkeypatch.setattr(mu, "MINERU_VENV", tmp_path / "venv")
+    monkeypatch.setattr(mu, "MINERU_CONFIG_PATH", tmp_path / "mineru.json")
+    monkeypatch.setattr("shutil.which", lambda *_: "/fake/uv")
+    recorder = Mock()
+    monkeypatch.setattr("subprocess.run", recorder)
+
+    mu.install_mineru(log=lambda *_: None)
+
+    cmds = [c.args[0] for c in recorder.call_args_list]
+    assert len(cmds) == 1 and "mineru-models-download" in cmds[0][0]  # no venv / pip calls
