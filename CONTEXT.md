@@ -17,7 +17,7 @@ The Markdown-plus-LaTeX text recognized from a Unit's image by the VLM. Same-lan
 _Avoid_: translation（翻译）, OCR, extraction
 
 **Segmentation Strategy（切分策略）**:
-The pluggable rule that maps one PDF into a tree of Units and the directories that hold them. The tool ships several and selects one per PDF. Variants below.
+The pluggable, content-derived rule that maps one PDF into a tree of Units — deciding *what* each Unit is (a page, a question, a section). It does **not** decide *where* Units land, nor — when a Layout Spec is present — *which* strategy runs for a given PDF; those are **Placement** concerns owned by the Layout Spec. Absent a spec, the tool auto-detects the strategy per PDF (ADR-0002/0006) and uses the variant's native default placement. The tool ships several variants (below).
 _Avoid_: mode, parser, splitter
 
 **Outline Strategy（章节切分）**:
@@ -31,6 +31,14 @@ Segmentation with one whole page = one Unit, flat under a per-PDF directory. The
 
 **Region（区域 / 一页 N 题）**:
 A sub-page crop: one page yielding N Unit images (e.g. several questions printed on one page). A refinement applied on top of the Question Strategy. Crop boundaries are reported by the VLM and snapped to the nearest blank horizontal band of the page image.
+
+**Placement（落位）**:
+*Where* a Unit's files land on disk and *how* they are named — a concern **orthogonal to Segmentation**. Each Segmentation Strategy carries a **native default** placement (Page → `<stem>/page-NNNN`, Outline → `<stem>/第N章/<section>/…`, Question → `<stem>/qNN`), used when no Layout Spec is present; a Layout Spec overrides it.
+_Avoid_: layout (as a verb), path rule
+
+**Layout Spec（布局规约）**:
+A repo-owned, declarative file (`<repo>/.ingest/layout.yaml`) that is the **single source of truth** for Placement in the invoking repo. An **ordered list of rules**, each mapping a **filename pattern** (regex with named captures such as `year`/`region`/`subject`) to a **Segmentation Strategy** *and* a **destination path template** (mixing those captures with structural tokens the segmenter emits — `qno`, `page`, `section`). First match wins; a template's terminal token (`q{qno}`) is the Unit's filename prefix, the segmenter appends suffixes/extensions (`-stem`, `.png`, `.md`). Templates resolve from the **repo root** — the spec owns the destination, so `--out` is at most an override. The tool auto-discovers it by walking up from cwd. Because a consumer's taxonomy lives in the consumer's own spec, the tool itself stays consumer-agnostic (see ADR-0008).
+_Avoid_: config, template, mapping file
 
 **Manifest（清单）**:
 The per-run record of every completed Unit and its provenance (source PDF, page, crop box, DPI, model id + revision). Drives idempotent per-Unit resume and serves as the audit trail.
