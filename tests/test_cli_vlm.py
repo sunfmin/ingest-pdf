@@ -17,15 +17,15 @@ def _ns(**kw) -> Namespace:
 
 
 def test_stub_returns_stub_vlm():
-    assert isinstance(_make_vlm(_ns(stub=True)), StubVLM)
+    assert isinstance(_make_vlm(_ns(stub=True), needs_vlm=True), StubVLM)
 
 
-def test_question_returns_no_vlm_without_loading_mlx():
-    vlm = _make_vlm(_ns(strategy="question"))  # must NOT touch mlx-vlm
+def test_no_vlm_when_no_pdf_needs_it_without_loading_mlx():
+    vlm = _make_vlm(_ns(strategy="question"), needs_vlm=False)  # must NOT touch mlx-vlm
     assert isinstance(vlm, NoVLM)
 
 
-def test_non_question_without_stub_requires_vlm_extra():
+def test_when_a_pdf_needs_vlm_without_stub_requires_vlm_extra():
     # in the test env mlx-vlm is absent ⇒ constructing MlxVLM exits with install instructions
     with pytest.raises(SystemExit, match="mlx-vlm"):
-        _make_vlm(_ns(strategy="page"))
+        _make_vlm(_ns(strategy="page"), needs_vlm=True)

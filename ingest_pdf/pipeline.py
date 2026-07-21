@@ -58,6 +58,7 @@ def run(
     n_writers: int = 4,
     pages: set[int] | None = None,
     log: Callable[[str], None] = print,
+    spec=None,
 ) -> dict:
     out_root = Path(out_root)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -84,9 +85,12 @@ def run(
     def plan_pdf(pdf: Path) -> None:
         doc = fitz.open(pdf)
         try:
-            strat = get_strategy(strategy_name, doc, pdf)
+            # A matching Layout Spec rule pins both the strategy and the placement (ADR-0008);
+            # otherwise fall back to the CLI strategy + historical <out_root>/<stem>.
+            m = spec.match(pdf.stem) if spec is not None else None
+            strat = get_strategy(m.rule.strategy if m else strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
-            placement = resolve_placement(pdf, out_root)  # the single 'where' seam (ADR-0008)
+            placement = resolve_placement(pdf, out_root, m)  # the single 'where' seam (ADR-0008)
             # Per-PDF provenance model = "id@revision": the strategy's own model when
             # it owns segmentation+transcription (Question/MinerU), else the VLM
             # (ADR-0006). Including the revision makes a model upgrade invalidate pages.
