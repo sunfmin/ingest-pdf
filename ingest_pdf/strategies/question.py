@@ -127,19 +127,18 @@ def group_questions(stream: list[tuple[int, MBlock]], log=print) -> list[_Questi
 
         if mode == "solution":
             # A header for a *later* question re-anchors collection there (its restated
-            # statement is dropped); a smaller number is a solution-internal reference, not a
-            # switch. Comparing to current.number (not a strict +1) tolerates a missing/merged
-            # restated header — that one question simply gets no solution rather than derailing
-            # every question after it.
+            # statement header is dropped); a smaller number is a solution-internal reference,
+            # not a switch. Comparing to current.number (not a strict +1) tolerates a
+            # missing/merged restated header — that one question simply gets no solution rather
+            # than derailing every question after it. Everything else after the header is this
+            # question's solution: in the 参考答案 section that's unambiguous, and crucially some
+            # papers give the 解答 with NO 【答案】/【解析】 bracket marker at all, so we must NOT
+            # gate collection on one (that dropped every solution on such papers).
             if head is not None and head in by_number and current is not None and head > current.number:
-                current, sol_started = by_number[head], False
+                current = by_number[head]
                 continue  # drop the restated statement header
             if current is not None:
-                if sol_started:
-                    current.solution.append((pi, b))
-                elif _is_solution(b):  # first marker → solution begins (drop any restated tail before it)
-                    sol_started = True
-                    current.solution.append((pi, b))
+                current.solution.append((pi, b))
             continue
 
         # ── stem pass (also the whole of an interleaved paper) ───────────────────────
