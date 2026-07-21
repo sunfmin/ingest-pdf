@@ -25,13 +25,35 @@ def parse_pages(spec: Optional[str]) -> Optional[set[int]]:
     return out or None
 
 
-def _make_vlm(args: argparse.Namespace):
-    """Build the VLM worker per flags. Question strategy ⇒ NoVLM (no vlm extra needed)."""
+def _needs_vlm(inputs: list[str], spec, arg_strategy: str) -> bool:
+    """Would any input PDF actually run a VLM-backed strategy (page/outline)? A Layout
+    Spec rule may pin a PDF to the zero-VLM Question path, so an all-question batch loads
+    no VLM even under --strategy auto (ADR-0006/0008)."""
+    if arg_strategy == "question":
+        return False
+    import fitz
+
+    from .pipeline import _iter_pdfs
+    from .strategies.detect import get_strategy
+
+    for pdf in _iter_pdfs([Path(p) for p in inputs]):
+        doc = fitz.open(pdf)
+        try:
+            m = spec.match(pdf.stem) if spec is not None else None
+            if get_strategy(m.rule.strategy if m else arg_strategy, doc, pdf).name in ("page", "outline"):
+                return True
+        finally:
+            doc.close()
+    return False
+
+
+def _make_vlm(args: argparse.Namespace, needs_vlm: bool):
+    """Build the VLM worker per flags. No PDF needs a VLM (e.g. all-question) ⇒ NoVLM."""
     if args.stub:
         from .vlm.worker import StubVLM
 
         return StubVLM()
-    if args.strategy == "question":
+    if not needs_vlm:
         from .vlm.worker import NoVLM  # zero-VLM path (ADR-0006)
 
         return NoVLM()
@@ -67,20 +89,45 @@ def _inspect_estimate(name: str, doc) -> object:
 
 def run_inspect(args: argparse.Namespace) -> int:
     """Print a per-PDF structure probe as JSON (no MinerU, no VLM) — the skill's
-    'analyze structure + design directory' step, done cheaply by the tool."""
+    'analyze structure + design directory' step, done cheaply by the tool.
+
+    Reports the Layout Spec match per PDF (ADR-0008): the matched rule → resolved
+    destination + strategy, or 'unmatched' / 'no-spec'. Report-only — placement is
+    not applied here (issue #14). A malformed spec fails fast."""
     import json
 
     import fitz
 
+    from . import layout
     from .pipeline import _iter_pdfs
     from .strategies.detect import get_strategy
+
+    try:
+        spec = layout.load_spec(Path(args.layout) if args.layout else None)
+    except layout.LayoutError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     rows = []
     for pdf in _iter_pdfs([Path(p) for p in args.inputs]):
         doc = fitz.open(pdf)
         try:
-            strat = get_strategy(args.strategy, doc, pdf)
+            m = spec.match(pdf.stem) if spec else None
+            # When a rule matches it pins the strategy; report what would actually run.
+            strat = get_strategy(m.rule.strategy if m else args.strategy, doc, pdf)
             name = strat.name
+            if spec is None:
+                lay = {"status": "no-spec"}
+            elif m is None:
+                lay = {"status": "unmatched"}
+            else:
+                lay = {
+                    "status": "matched",
+                    "rule": m.rule.name,
+                    "strategy": m.rule.strategy,
+                    "dest": m.resolve(),
+                    "captures": {k: v for k, v in m.captures.items() if v is not None},
+                }
             rows.append(
                 {
                     "path": str(pdf.resolve()),
@@ -90,6 +137,7 @@ def run_inspect(args: argparse.Namespace) -> int:
                     "needs_vlm": name in ("page", "outline"),
                     "out_subdir": pdf.stem,
                     "estimate": _inspect_estimate(name, doc),
+                    "layout": lay,
                 }
             )
         finally:
@@ -115,6 +163,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="probe each PDF's structure (strategy/pages/estimate) as JSON; no MinerU/VLM; then exit",
     )
     ap.add_argument("--out", default=None, help="output root directory (required unless --inspect/--install-mineru)")
+    ap.add_argument(
+        "--layout",
+        default=None,
+        help="path to a Layout Spec (default: auto-discover .ingest/layout.yaml from cwd; ADR-0008)",
+    )
     ap.add_argument(
         "--strategy",
         default="auto",
@@ -143,22 +196,34 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.inspect:
         return run_inspect(args)
 
-    if not args.out:
-        ap.error("the following arguments are required: --out")
+    from . import layout
+
+    try:
+        spec = layout.load_spec(Path(args.layout) if args.layout else None)
+    except layout.LayoutError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    # The Layout Spec owns the destination: without --out, land under the spec's repo root
+    # (the dir containing .ingest/). --out, when given, overrides that base (ADR-0008).
+    out_root = args.out or (str(spec.repo_root) if spec else None)
+    if not out_root:
+        ap.error("--out is required (or add a Layout Spec at .ingest/layout.yaml)")
 
     from .pipeline import run
 
-    vlm = _make_vlm(args)
+    vlm = _make_vlm(args, _needs_vlm(args.inputs, spec, args.strategy))
 
     try:
         counters = run(
             args.inputs,
-            args.out,
+            out_root,
             args.strategy,
             vlm,
             dpi=args.dpi,
             n_render=args.concurrency,
             pages=parse_pages(args.pages),
+            spec=spec,
         )
     except NotImplementedError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -168,7 +233,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     print(
         f"\ndone: {counters['done']}  failed: {counters['failed']}  "
-        f"skipped(resume): {counters['skipped']}  →  {args.out}"
+        f"skipped(resume): {counters['skipped']}  →  {out_root}"
     )
     return 1 if counters["failed"] else 0
 

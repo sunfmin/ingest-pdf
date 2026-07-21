@@ -38,6 +38,7 @@ from PIL import Image
 
 from .. import provenance
 from ..models import OutUnit, PageJob, PageResult, RenderedPage
+from ..placement import Placement
 from . import _crop, _mineru
 from ._mineru import MBlock
 from .base import strip_header
@@ -235,8 +236,8 @@ class QuestionStrategy:
 
     # ── Strategy protocol ────────────────────────────────────────────────────────
 
-    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, out_root: Path) -> list[PageJob]:
-        cache = out_root / ".mineru" / pdf_path.stem
+    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement) -> list[PageJob]:
+        cache = placement.cache_dir
         middle = _mineru.run_mineru(pdf_path, cache)
         per_page = _mineru.parse_blocks(middle)
         stream = [(pi, b) for pi in sorted(per_page) for b in per_page[pi]]
@@ -244,7 +245,7 @@ class QuestionStrategy:
         self._pages = _build_frags(questions)
         # Cache page widths from the already-open doc (avoid per-emit fitz.open, nit #2)
         self._page_width = {pi: float(doc[pi].rect.width) for pi in self._pages}
-        out_dir = out_root / pdf_path.stem
+        out_dir = placement.out_dir
         return [
             PageJob(pdf_path=pdf_path, pdf_key=pdf_key, page_index=pi, out_dir=out_dir)
             for pi in sorted(self._pages)

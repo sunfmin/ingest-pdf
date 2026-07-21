@@ -2,6 +2,8 @@
 
 > **Revised by ADR-0004**: the real corpus has no bookmarks, so the Outline strategy derives its tree from section numbers in the transcription rather than the PDF bookmark outline, and detection can't key on "bookmark present".
 
+> **Revised by ADR-0008**: two premises soften. (1) Placement is un-bundled from Segmentation — a strategy now decides only *what* a Unit is; *where* it lands is a separate concern. (2) "Never into the consuming repo / must not couple to any consumer" becomes "the *tool* stays consumer-agnostic, but a consumer may own a declarative **Layout Spec** (`.ingest/layout.yaml`) that lands Units inside its own tree and pins the strategy per rule." Auto-detection + `--out` + `--strategy` remain the fallback when no spec is present.
+
 The tool ships several **Segmentation Strategies** — Outline (textbook chapters, driven by the PDF bookmark outline), Question (exam papers, split per question), and Page (universal whole-page fallback) — and **auto-detects** which to apply per PDF: a bookmark outline present → Outline; no outline but question markers (`一、` / `17.` / `(1)`) detected → Question; else → Page. A `--strategy` flag overrides when the guess is wrong. Output is a tree of **Units**, each a colocated *(image file, transcription-markdown file)* pair, written to a user-specified `--out` directory — **never into the tool's own repo** (the prior pipeline committed products straight into the consuming wiki; this general tool must not couple to any one consumer). A per-run **Manifest** records completed Units for idempotent per-Unit resume.
 
 ## Considered options

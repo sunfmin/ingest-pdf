@@ -10,13 +10,14 @@ from pathlib import Path
 import fitz
 
 from ..models import OutUnit, PageJob, PageResult, RenderedPage
+from ..placement import Placement
 
 
 class PageStrategy:
     name = "page"
 
-    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, out_root: Path) -> list[PageJob]:
-        out_dir = out_root / pdf_path.stem
+    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement) -> list[PageJob]:
+        out_dir = placement.out_dir
         return [
             PageJob(pdf_path=pdf_path, pdf_key=pdf_key, page_index=i, out_dir=out_dir)
             for i in range(doc.page_count)
