@@ -16,6 +16,14 @@ because the model merged its header into the previous question's tail block): a 
 number is recognised both at a block's start AND, as a fallback, when the *expected*
 number appears after whitespace/newline inside a merged block. A pre-scan for a 大题头
 (`一、…`) decides whether leading numbered lines (the 注意事项 list) must be gated out.
+
+Two paper layouts are supported. *Interleaved*: each question is immediately followed by
+its own solution (【答案】/【解析】…). *Two-pass*: the 试卷 restates every question with no
+solution (Q1…QN), then a 参考答案与解析 section restates Q1…QN again, each followed by its
+solution — detected when a question header for №1 reappears after we have already collected
+questions. In both, a question carries a `stem` (the statement) and a `solution` (the
+分析/解答), so it yields qNN-stem (statement only) and qNN (statement + solution stitched,
+across the two segments when two-pass).
 """
 
 from __future__ import annotations
@@ -39,10 +47,15 @@ if TYPE_CHECKING:
 
 # A 大题头 section header: "一、选择题 …". Used as the gating sentinel.
 _SECTION_RE = re.compile(r"^[一二三四五六七八九十]+、")
-# Question header at a block's start; the trailing mark is optional (2024 Q4 = "4 已知").
-_HEADER_RE = re.compile(r"^(\d{1,2})\s*[.．、]?\s")
-# Same number appearing after whitespace/newline *inside* a merged block (fallback).
-_MERGED_RE = re.compile(r"(?:^|[\s\n])(\d{1,2})\s*[.．、]\s")
+# Question header at a block's start. Two accepted shapes, so we handle every observed
+# 高考 paper format: (a) number + mark [.．、] + (a following 「（」/「(」 score marker OR any
+# non-digit) — matches both "1. 已知" and the space-less "1．（5 分）" the Zhejiang papers use;
+# (b) number + whitespace, no mark at all (2024 Q4 = "4 已知"). The non-digit lookahead keeps a
+# decimal like "1．5" from being mistaken for a header.
+_HEADER_RE = re.compile(r"^(\d{1,2})(?:\s*[.．、]\s*(?=[（(]|[^\d\s])|\s+(?=[^\d\s]))")
+# Same number appearing after whitespace/newline *inside* a merged block (fallback); mirrors
+# the mark branch above so "…\n11．（6分）" is caught as well as "…\n3. 第三题".
+_MERGED_RE = re.compile(r"(?:^|[\s\n])(\d{1,2})\s*[.．、]\s*(?=[（(]|[^\d\s])")
 # A solution-section marker. The stem ends just before the first of these. 【答案】 is the
 # usual one, but MinerU sometimes drops it (observed: a question whose first solution block
 # is 【分析】), so we also cut on 【解析】/【分析】/【详解】 — whichever comes first.
@@ -52,8 +65,11 @@ _SOLUTION_RE = re.compile(r"【(?:答案|解析|分析|详解)】")
 @dataclass
 class _Question:
     number: int
-    blocks: list[tuple[int, MBlock]] = field(default_factory=list)  # (page_index, block)
-    solution_start: int | None = None  # index into blocks of the first solution marker, else None
+    # (page_index, block) in reading order. `stem` = the question statement (the 试卷 blocks,
+    # or the pre-marker blocks of an interleaved question); `solution` = the 分析/解答 blocks
+    # (the 参考答案 blocks in a two-pass paper, or the post-marker blocks when interleaved).
+    stem: list[tuple[int, MBlock]] = field(default_factory=list)
+    solution: list[tuple[int, MBlock]] = field(default_factory=list)
 
 
 def _is_solution(b: MBlock) -> bool:
@@ -65,11 +81,32 @@ def _block_text_stripped(b: MBlock) -> str:
 
 
 def group_questions(stream: list[tuple[int, MBlock]], log=print) -> list[_Question]:
-    """Group an in-reading-order (page, block) stream into questions (see module doc)."""
+    """Group an in-reading-order (page, block) stream into questions (see module doc).
+
+    Runs in one of two modes. It starts in *stem* mode, collecting each question's statement.
+    If a header for №1 reappears after we already have questions (the 参考答案与解析 section of a
+    two-pass paper), it switches to *solution* mode: from there, a sequential header routes
+    following blocks to the already-collected question's `solution`, dropping the restated
+    statement. An *interleaved* paper never restarts — its per-question 【答案】/【解析】 blocks
+    flip that question from stem to solution collection in place.
+    """
     has_section = any(_SECTION_RE.match(_block_text_stripped(b)) for _, b in stream)
     started = not has_section  # no 大题头 → begin at the first header, skipping a title/notice
     expected = 1
     questions: list[_Question] = []
+    by_number: dict[int, _Question] = {}
+    mode = "stem"  # "stem" (试卷 pass) → "solution" (参考答案 pass, two-pass papers only)
+    current: _Question | None = None
+    sol_started = False  # within `current`, has its solution part begun
+
+    def _header_num(t: str, b: MBlock) -> int | None:
+        m = _HEADER_RE.match(t)
+        if m:
+            return int(m.group(1))
+        mm = _MERGED_RE.search(b.text)  # merged-block fallback: only the number we expect
+        if mm and mode == "stem" and int(mm.group(1)) == expected:
+            return expected
+        return None
 
     for pi, b in stream:
         t = _block_text_stripped(b)
@@ -78,34 +115,59 @@ def group_questions(stream: list[tuple[int, MBlock]], log=print) -> list[_Questi
                 started = True
             continue  # preface (and the section header block itself) is never a question
 
-        if _SECTION_RE.match(t):  # a later section header between questions — skip, don't attach
+        if _SECTION_RE.match(t):  # a section header (incl. the repeated ones in the answer pass)
             continue
 
-        m = _HEADER_RE.match(t)
-        head = int(m.group(1)) if m else None
-        if head is None:  # merged-block fallback: accept only the number we are expecting
-            mm = _MERGED_RE.search(b.text)
-            if mm and int(mm.group(1)) == expected:
-                head = expected
+        head = _header_num(t, b)
 
+        # ── switch into the answer/solution pass: №1's header seen again ──────────────
+        if mode == "stem" and head == 1 and 1 in by_number and expected > 1:
+            mode, current, sol_started = "solution", by_number[1], False
+            continue  # drop the restated statement header
+
+        if mode == "solution":
+            # A header for a *later* question re-anchors collection there (its restated
+            # statement is dropped); a smaller number is a solution-internal reference, not a
+            # switch. Comparing to current.number (not a strict +1) tolerates a missing/merged
+            # restated header — that one question simply gets no solution rather than derailing
+            # every question after it.
+            if head is not None and head in by_number and current is not None and head > current.number:
+                current, sol_started = by_number[head], False
+                continue  # drop the restated statement header
+            if current is not None:
+                if sol_started:
+                    current.solution.append((pi, b))
+                elif _is_solution(b):  # first marker → solution begins (drop any restated tail before it)
+                    sol_started = True
+                    current.solution.append((pi, b))
+            continue
+
+        # ── stem pass (also the whole of an interleaved paper) ───────────────────────
         if head is None:
-            if questions:
-                cur = questions[-1]
-                if cur.solution_start is None and _is_solution(b):
-                    cur.solution_start = len(cur.blocks)
-                cur.blocks.append((pi, b))
+            if current is not None:
+                if sol_started or _is_solution(b):
+                    sol_started = True
+                    current.solution.append((pi, b))
+                else:
+                    current.stem.append((pi, b))
             continue
 
         if head == expected:
-            questions.append(_Question(number=head, blocks=[(pi, b)]))
+            current = _Question(number=head, stem=[(pi, b)])
+            questions.append(current)
+            by_number[head] = current
+            sol_started = False
             expected += 1
         elif head > expected:
             log(f"  ! question: missing {expected}..{head - 1}, jumping to {head}")
-            questions.append(_Question(number=head, blocks=[(pi, b)]))
+            current = _Question(number=head, stem=[(pi, b)])
+            questions.append(current)
+            by_number[head] = current
+            sol_started = False
             expected = head + 1
         else:  # head < expected → a stray body number (e.g. an option line) at block start
-            if questions:
-                questions[-1].blocks.append((pi, b))
+            if current is not None:
+                (current.solution if sol_started else current.stem).append((pi, b))
 
     return questions
 
@@ -130,22 +192,25 @@ def _union_pt(blocks: list[MBlock]) -> tuple[float, float, float, float]:
 
 
 def _build_frags(questions: list[_Question]) -> dict[int, list[_Frag]]:
-    """questions → {page_index: [_Frag …]}; each question emits a full frag per page it
-    touches and a stem frag per page that has pre-solution blocks (stem only if the
-    question has a solution marker at all)."""
+    """questions → {page_index: [_Frag …]}. Each question emits a full frag per page it
+    touches (stem ∪ solution — in a two-pass paper these live on different pages, and
+    finalize stitches them in page order) and a stem frag per stem page — the stem variant
+    only when the question actually has a solution (else it would equal the full)."""
     pages: dict[int, list[_Frag]] = {}
     for q in questions:
         full_by_page: dict[int, list[MBlock]] = {}
         stem_by_page: dict[int, list[MBlock]] = {}
-        for i, (pi, b) in enumerate(q.blocks):
+        for pi, b in q.stem:
             full_by_page.setdefault(pi, []).append(b)
-            if q.solution_start is not None and i < q.solution_start:
-                stem_by_page.setdefault(pi, []).append(b)
+            stem_by_page.setdefault(pi, []).append(b)
+        for pi, b in q.solution:
+            full_by_page.setdefault(pi, []).append(b)
+        has_solution = bool(q.solution)
         for pi in sorted(full_by_page):
             pages.setdefault(pi, []).append(
                 _Frag(q.number, pi, _union_pt(full_by_page[pi]), "".join(b.text for b in full_by_page[pi]), "full")
             )
-            if q.solution_start is not None and stem_by_page.get(pi):
+            if has_solution and stem_by_page.get(pi):
                 sb = stem_by_page[pi]
                 pages[pi].append(_Frag(q.number, pi, _union_pt(sb), "".join(b.text for b in sb), "stem"))
     return pages
