@@ -1,5 +1,7 @@
 # Question 策略用 MinerU 做切分+转写：行使 ADR-0003 的 per-strategy 修订（零 VLM）
 
+> **由 ADR-0007 修订**：MinerU 现跑的是**打包的 `MinerU2.5-Pro-2605-1.2B` VLM**（`-b hybrid-auto-engine`，Apple Silicon 上自动 MLX），而非本文假定的 pipeline 模型。因此 `install_mineru` 改为 `-m all` + 钉 `mlx==0.31.1`，provenance 记实际模型名（`MinerU2.5-Pro-2605-1.2B@mineru<ver>-hybrid`）而非 `mineru@<ver>`。本文的核心决定不变（MinerU 独任切分+转写、`para_blocks` 单源、子进程隔离）。惟「零 VLM」应读作**零项目自管 VLM token**——MinerU 子进程内部现在本身就是一个 VLM。
+
 ## 状态
 
 Accepted（milestone 4 / issue #4）。
