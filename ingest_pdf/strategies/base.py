@@ -27,6 +27,7 @@ from typing import Protocol
 import fitz
 
 from ..models import OutUnit, PageJob, PageResult, RenderedPage
+from ..placement import Placement
 
 
 def strip_header(md: str) -> str:
@@ -41,8 +42,12 @@ def strip_header(md: str) -> str:
 class Strategy(Protocol):
     name: str
 
-    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, out_root: Path) -> list[PageJob]:
-        """Enumerate the pages to process and where their Units live."""
+    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement) -> list[PageJob]:
+        """Enumerate the pages to process and where their Units live.
+
+        ``placement`` (resolved once per PDF by the pipeline) supplies the destination
+        directory + scratch cache, so the strategy no longer computes ``out_root/stem``.
+        """
         ...
 
     def render_target(self, job: PageJob) -> Path:

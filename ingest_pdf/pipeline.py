@@ -23,6 +23,7 @@ import fitz
 
 from .manifest import Manifest
 from .models import PageResult, RenderedPage, RunContext
+from .placement import resolve_placement
 from .provenance import header
 from .render import render_page
 from .strategies.detect import get_strategy
@@ -85,6 +86,7 @@ def run(
         try:
             strat = get_strategy(strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
+            placement = resolve_placement(pdf, out_root)  # the single 'where' seam (ADR-0008)
             # Per-PDF provenance model = "id@revision": the strategy's own model when
             # it owns segmentation+transcription (Question/MinerU), else the VLM
             # (ADR-0006). Including the revision makes a model upgrade invalidate pages.
@@ -92,14 +94,14 @@ def run(
             _mrev = getattr(strat, "revision", None) or vlm.revision
             manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
             local = []
-            for job in strat.plan(doc, pdf, pdf_key, out_root):
+            for job in strat.plan(doc, pdf, pdf_key, placement):
                 if pages and (job.page_index + 1) not in pages:
                     continue
                 local.append((job, strat))
             with plan_lock:
                 planned.extend(local)
                 if hasattr(strat, "finalize"):
-                    finalize_targets[pdf_key] = (strat, out_root / pdf.stem)
+                    finalize_targets[pdf_key] = (strat, placement.out_dir)
         finally:
             doc.close()
 
