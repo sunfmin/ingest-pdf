@@ -67,20 +67,45 @@ def _inspect_estimate(name: str, doc) -> object:
 
 def run_inspect(args: argparse.Namespace) -> int:
     """Print a per-PDF structure probe as JSON (no MinerU, no VLM) — the skill's
-    'analyze structure + design directory' step, done cheaply by the tool."""
+    'analyze structure + design directory' step, done cheaply by the tool.
+
+    Reports the Layout Spec match per PDF (ADR-0008): the matched rule → resolved
+    destination + strategy, or 'unmatched' / 'no-spec'. Report-only — placement is
+    not applied here (issue #14). A malformed spec fails fast."""
     import json
 
     import fitz
 
+    from . import layout
     from .pipeline import _iter_pdfs
     from .strategies.detect import get_strategy
+
+    try:
+        spec = layout.load_spec(Path(args.layout) if args.layout else None)
+    except layout.LayoutError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
     rows = []
     for pdf in _iter_pdfs([Path(p) for p in args.inputs]):
         doc = fitz.open(pdf)
         try:
-            strat = get_strategy(args.strategy, doc, pdf)
+            m = spec.match(pdf.stem) if spec else None
+            # When a rule matches it pins the strategy; report what would actually run.
+            strat = get_strategy(m.rule.strategy if m else args.strategy, doc, pdf)
             name = strat.name
+            if spec is None:
+                lay = {"status": "no-spec"}
+            elif m is None:
+                lay = {"status": "unmatched"}
+            else:
+                lay = {
+                    "status": "matched",
+                    "rule": m.rule.name,
+                    "strategy": m.rule.strategy,
+                    "dest": m.resolve(),
+                    "captures": {k: v for k, v in m.captures.items() if v is not None},
+                }
             rows.append(
                 {
                     "path": str(pdf.resolve()),
@@ -90,6 +115,7 @@ def run_inspect(args: argparse.Namespace) -> int:
                     "needs_vlm": name in ("page", "outline"),
                     "out_subdir": pdf.stem,
                     "estimate": _inspect_estimate(name, doc),
+                    "layout": lay,
                 }
             )
         finally:
@@ -115,6 +141,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="probe each PDF's structure (strategy/pages/estimate) as JSON; no MinerU/VLM; then exit",
     )
     ap.add_argument("--out", default=None, help="output root directory (required unless --inspect/--install-mineru)")
+    ap.add_argument(
+        "--layout",
+        default=None,
+        help="path to a Layout Spec (default: auto-discover .ingest/layout.yaml from cwd; ADR-0008)",
+    )
     ap.add_argument(
         "--strategy",
         default="auto",
