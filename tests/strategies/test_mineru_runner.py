@@ -148,7 +148,7 @@ def test_run_mineru_miss_invokes_with_modelscope_config(monkeypatch, tmp_path):
     run_mock.assert_called_once()
     cmd = run_mock.call_args.args[0]
     assert cmd[:1] == ["/fake/mineru"]
-    assert "-b" in cmd and cmd[cmd.index("-b") + 1] == "hybrid-auto-engine"
+    assert "-b" in cmd and cmd[cmd.index("-b") + 1] == mu.MINERU_BACKEND == "hybrid-auto-engine"
     assert str(pdf) in cmd
     # modelscope config written + exported to the subprocess env
     cfg = json.loads((tmp_path / "mineru.json").read_text())
@@ -275,8 +275,12 @@ def test_install_mineru_builds_venv_and_downloads_models(monkeypatch, tmp_path):
 
     cmds = [c.args[0] for c in recorder.call_args_list]
     assert cmds[0][:3] == ["/fake/uv", "venv", str(tmp_path / "venv")] and "--python" in cmds[0]
+    # pip installs mineru[all] AND pins mlx to the known-good version (0.31.2 breaks MLX)
     assert cmds[1][1] == "pip" and "mineru[all]" in cmds[1] and mu._PIP_INDEX in cmds[1]
+    assert mu._MLX_PIN in cmds[1] and mu._MLX_PIN == "mlx==0.31.1"
+    # -m all: hybrid backend needs BOTH pipeline models and the MinerU2.5 VLM
     assert "mineru-models-download" in cmds[2][0] and "-s" in cmds[2] and "modelscope" in cmds[2]
+    assert cmds[2][cmds[2].index("-m") + 1] == "all"
     # models-download carries the modelscope config so models come from the CN mirror
     assert recorder.call_args_list[2].kwargs["env"]["MINERU_TOOLS_CONFIG_JSON"] == str(tmp_path / "mineru.json")
 
@@ -296,3 +300,40 @@ def test_install_mineru_skips_venv_when_present(monkeypatch, tmp_path):
 
     cmds = [c.args[0] for c in recorder.call_args_list]
     assert len(cmds) == 1 and "mineru-models-download" in cmds[0][0]  # no venv / pip calls
+
+
+# ── model_identity: name the actual VLM model for provenance (ADR-0007) ──────────
+
+
+def _make_cache(tmp_path, *dir_names):
+    root = tmp_path / "modelscope" / "models"
+    for n in dir_names:
+        (root / n).mkdir(parents=True)
+    return root
+
+
+def test_model_identity_names_detected_vlm(monkeypatch, tmp_path):
+    root = _make_cache(tmp_path, "OpenDataLab--MinerU2.5-Pro-2605-1.2B")
+    monkeypatch.setattr(mu, "_MODEL_CACHE_DIRS", (root,))
+    monkeypatch.setattr(mu, "mineru_pkg_version", lambda: "3.4.4")
+
+    assert mu.model_identity() == ("MinerU2.5-Pro-2605-1.2B", "mineru3.4.4-hybrid")
+
+
+def test_detected_vlm_handles_hf_prefix_and_picks_latest(monkeypatch, tmp_path):
+    # HF-hub 'models--org--name' prefix, plus an older version present → latest wins
+    root = _make_cache(
+        tmp_path,
+        "models--OpenDataLab--MinerU2.5-2509-1.2B",
+        "models--OpenDataLab--MinerU2.5-Pro-2605-1.2B",
+    )
+    monkeypatch.setattr(mu, "_MODEL_CACHE_DIRS", (root,))
+    assert mu._detected_vlm_model() == "MinerU2.5-Pro-2605-1.2B"
+
+
+def test_model_identity_falls_back_when_no_model_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(mu, "_MODEL_CACHE_DIRS", (tmp_path / "absent",))
+    monkeypatch.setattr(mu, "mineru_pkg_version", lambda: "3.4.4")
+
+    # no MinerU2.5 dir on disk ⇒ generic id, bare pkg version (no backend suffix)
+    assert mu.model_identity() == ("mineru", "3.4.4")

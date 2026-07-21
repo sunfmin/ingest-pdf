@@ -30,6 +30,19 @@ MINERU_BIN_PATH = MINERU_VENV / "bin" / "mineru"
 MINERU_CONFIG_PATH = CACHE_ROOT / "mineru.json"
 _MODELSCOPE_CONFIG = {"model-source": "modelscope"}
 
+# Backend passed to `mineru -b`. `hybrid-auto-engine` blends the pipeline models with
+# the MinerU2.5 VLM and, on Apple Silicon (macOS 13.5+), auto-selects MLX for the VLM
+# half — so the exam path already runs the bundled MinerU2.5-Pro VLM under MLX (ADR-0007).
+# Single source of truth: used in run_mineru's argv and folded into provenance revision.
+MINERU_BACKEND = "hybrid-auto-engine"
+
+# Model caches MinerU downloads into. The VLM model version is bundled with the mineru
+# package (no per-run flag selects it); we read its on-disk name for provenance.
+_MODEL_CACHE_DIRS = (
+    Path.home() / ".cache" / "modelscope" / "models",
+    Path.home() / ".cache" / "huggingface" / "hub",
+)
+
 # Inline vs display formula span types emitted by MinerU's middle.json.
 _INLINE_EQ = {"inline_equation"}
 _DISPLAY_EQ = {"interline_equation", "display_equation", "isolated_formula"}
@@ -74,9 +87,40 @@ def mineru_pkg_version() -> str:
     return "unknown"
 
 
+def _detected_vlm_model() -> str | None:
+    """Best-effort name of the MinerU2.5 VLM model on disk, e.g. 'MinerU2.5-Pro-2605-1.2B'.
+
+    Cache dir names are org-prefixed — 'OpenDataLab--MinerU2.5-Pro-2605-1.2B' (modelscope)
+    or 'models--OpenDataLab--MinerU2.5-Pro-2605-1.2B' (HF hub) — so we take the segment
+    after the last '--'. If several versions are cached we pick the lexically-latest
+    (…-Pro-2605 > …-Pro-2604 > …-2509), which matches the newest install in practice.
+    """
+    names: set[str] = set()
+    for root in _MODEL_CACHE_DIRS:
+        if not root.exists():
+            continue
+        for p in root.iterdir():
+            if p.is_dir() and "MinerU2.5" in p.name:
+                names.add(p.name.split("--")[-1])
+    return max(names) if names else None
+
+
 def model_identity() -> tuple[str, str]:
-    """(model_id, revision) for provenance: ('mineru', <pkg version|unknown>)."""
-    return "mineru", mineru_pkg_version()
+    """(model_id, revision) for provenance.
+
+    model_id is the actual recognition model — the MinerU2.5 VLM name detected on disk —
+    so a Unit's header names exactly what transcribed it (e.g. 'MinerU2.5-Pro-2605-1.2B').
+    revision pins the mineru package version + backend ('mineru3.4.4-hybrid'); a model
+    upgrade (a new bundled VLM ships with a new package version) or a backend switch both
+    change it and so force re-Calibration. Falls back to the generic ('mineru', <pkg
+    version>) when the model dir can't be located (ADR-0007).
+    """
+    ver = mineru_pkg_version()
+    model = _detected_vlm_model()
+    if model is None:
+        return "mineru", ver
+    backend = MINERU_BACKEND.removesuffix("-auto-engine").removesuffix("-engine")
+    return model, f"mineru{ver}-{backend}"
 
 
 _NOT_INSTALLED = (
@@ -180,7 +224,7 @@ def run_mineru(
 
     cfg = _write_config()
     env = {**os.environ, "MINERU_TOOLS_CONFIG_JSON": str(cfg)}
-    cmd = [*bin_argv, "-p", str(pdf), "-o", str(out_dir), "-b", "hybrid-auto-engine"]
+    cmd = [*bin_argv, "-p", str(pdf), "-o", str(out_dir), "-b", MINERU_BACKEND]
     log(f"  · running mineru on {pdf.name} …")
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
     if proc.returncode != 0:
@@ -239,12 +283,20 @@ def parse_blocks(middle: Path) -> dict[int, list[MBlock]]:
 
 _PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
+# Known-good MLX pin for the vlm MLX engine. The MinerU maintainer reports mlx 0.31.2
+# breaks it (a stream error); 0.31.1 works. Pinned exactly so a fresh install can't
+# drift onto the broken release — revisit on any MinerU upgrade (ADR-0007).
+_MLX_PIN = "mlx==0.31.1"
+
 
 def install_mineru(log: Callable[[str], None] = print) -> None:
-    """Build the isolated mineru venv + download pipeline models via ModelScope.
+    """Build the isolated mineru venv + download all models (pipeline + VLM) via ModelScope.
 
-    Heavy (~2 GB models); run explicitly, never implicitly. Uses a CN mirror for pip
-    and ModelScope for models (HF is blocked/unreliable from CN — spike finding).
+    Heavy (~4 GB models); run explicitly, never implicitly. Uses a CN mirror for pip
+    and ModelScope for models (HF is blocked/unreliable from CN — spike finding). The
+    exam path runs MinerU's `hybrid-auto-engine`, which needs BOTH the pipeline models
+    and the MinerU2.5-Pro VLM (MLX-accelerated on Apple Silicon), hence `-m all` and the
+    pinned `mlx` (ADR-0007).
     """
     uv = shutil.which("uv")
     if uv is None:
@@ -257,7 +309,7 @@ def install_mineru(log: Callable[[str], None] = print) -> None:
     if not MINERU_BIN_PATH.exists():
         log(f"creating isolated venv at {MINERU_VENV} (python 3.12) …")
         run([uv, "venv", str(MINERU_VENV), "--python", "3.12"])
-        log("installing mineru[all] (CN mirror) …")
+        log(f"installing mineru[all] + {_MLX_PIN} (CN mirror) …")
         run(
             [
                 uv,
@@ -269,6 +321,7 @@ def install_mineru(log: Callable[[str], None] = print) -> None:
                 _PIP_INDEX,
                 "-U",
                 "mineru[all]",
+                _MLX_PIN,
             ]
         )
     else:
@@ -276,9 +329,9 @@ def install_mineru(log: Callable[[str], None] = print) -> None:
 
     cfg = _write_config()
     env = {**os.environ, "MINERU_TOOLS_CONFIG_JSON": str(cfg)}
-    log("downloading pipeline models from ModelScope …")
+    log("downloading all models (pipeline + VLM) from ModelScope …")
     subprocess.run(
-        [str(MINERU_BIN_PATH.parent / "mineru-models-download"), "-s", "modelscope", "-m", "pipeline"],
+        [str(MINERU_BIN_PATH.parent / "mineru-models-download"), "-s", "modelscope", "-m", "all"],
         env=env,
         check=True,
     )
