@@ -68,7 +68,7 @@ def test_question_pipeline_full_and_stem_zero_vlm(tmp_path, monkeypatch):
     middle = tmp_path / "fixture_middle.json"
     _fixture_middle(middle)
 
-    monkeypatch.setattr(_mineru, "run_mineru", lambda pdf_, cache, log=print: middle)
+    monkeypatch.setattr(_mineru, "run_mineru", lambda pdf_, cache, log=print, pages=None: middle)
     monkeypatch.setattr(_mineru, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"

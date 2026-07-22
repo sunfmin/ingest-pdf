@@ -116,6 +116,10 @@ def finalize(out_dir: Path, manifest: "Manifest", pdf_key: str, log=print) -> No
         md_path.replace(dest_md)
         if png_path.exists():
             png_path.replace(dest_png)
+        # Move the page's inlined figures (page-NNNN.fig-*) as a set, so the md's relative
+        # `![](…)` refs stay valid in the new section dir (ADR-0010 figure inlining).
+        for fig in sorted(md_path.parent.glob(f"{u['name']}.fig-*")):
+            fig.replace(dest_md.parent / fig.name)
         u["placed"] = new_stem
         u["md"] = f"{new_stem}.md"
         u["image"] = f"{new_stem}.png"

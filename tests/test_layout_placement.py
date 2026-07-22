@@ -73,7 +73,7 @@ def _prose_middle(path: Path) -> None:
 
 
 def _patch_mineru(monkeypatch, middle: Path) -> None:
-    monkeypatch.setattr(_mineru, "run_mineru", lambda p, cache, log=print: middle)
+    monkeypatch.setattr(_mineru, "run_mineru", lambda p, cache, log=print, pages=None: middle)
     monkeypatch.setattr(_mineru, "model_identity", lambda: ("mineru", "test"))
 
 
@@ -120,7 +120,7 @@ def test_question_pipeline_lands_at_templated_path(tmp_path, monkeypatch):
     _blank_pdf(pdf)
     middle = tmp_path / "mid.json"
     _one_question_middle(middle)
-    monkeypatch.setattr(_mineru, "run_mineru", lambda p, cache, log=print: middle)
+    monkeypatch.setattr(_mineru, "run_mineru", lambda p, cache, log=print, pages=None: middle)
     monkeypatch.setattr(_mineru, "model_identity", lambda: ("mineru", "test"))
 
     base = tmp_path / "repo"

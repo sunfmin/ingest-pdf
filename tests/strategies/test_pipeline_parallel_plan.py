@@ -35,7 +35,7 @@ def _mk(path):
 
 
 def _fake_run_mineru_recording(barrier, entered):
-    def fake(pdf, cache, log=None):
+    def fake(pdf, cache, log=None, pages=None):
         barrier.wait(timeout=10)  # both PDF threads must be here at once (serial ⇒ timeout ⇒ fail)
         entered.append(threading.get_ident())
         middle = cache / "m.json"
@@ -67,7 +67,7 @@ def test_plan_serial_branch_is_correct(monkeypatch, tmp_path):
     _mk(a)
     _mk(b)
 
-    def fake(pdf, cache, log=None):
+    def fake(pdf, cache, log=None, pages=None):
         middle = cache / "m.json"
         middle.parent.mkdir(parents=True, exist_ok=True)
         middle.write_text(json.dumps(_MIDDLE))

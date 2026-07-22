@@ -66,6 +66,37 @@ def test_parse_blocks_wraps_formulas_and_keeps_pt_bbox(tmp_path):
     assert blocks[2].text == "$$a^2+b^2=c^2$$"
 
 
+def test_run_mineru_subset_slices_and_remaps(monkeypatch, tmp_path):
+    """--pages: MinerU runs on only the requested pages (sliced), and the result is remapped
+    back to original page indices so downstream keys by original page (ADR-0010)."""
+    import fitz
+
+    pdf = tmp_path / "book.pdf"
+    doc = fitz.open()
+    for _ in range(5):
+        doc.new_page(width=200, height=200)
+    doc.save(pdf)
+    doc.close()
+
+    def _blk(text):
+        return {"bbox": [0, 0, 1, 1], "type": "text", "lines": [{"spans": [{"type": "text", "content": text}]}]}
+
+    # the slice (pages 2 & 4) → a 2-entry pdf_info; _run_subset must scatter it to indices 1 and 3
+    def fake_produce(slice_pdf, out_dir, log):
+        m = out_dir / "s_middle.json"
+        m.write_text(json.dumps({"pdf_info": [{"para_blocks": [_blk("P2")]}, {"para_blocks": [_blk("P4")]}]}))
+        return m
+
+    monkeypatch.setattr(mu, "_produce_middle", fake_produce)
+
+    middle = mu.run_mineru(pdf, tmp_path / "cache", log=lambda *_: None, pages={2, 4})
+    blocks = mu.parse_blocks(middle)
+
+    assert set(blocks) == {0, 1, 2, 3}  # padded to max original index + 1
+    assert blocks[1][0].text == "P2" and blocks[3][0].text == "P4"  # remapped to original indices
+    assert blocks[0] == [] and blocks[2] == []  # skipped pages are empty
+
+
 def test_parse_blocks_multi_page_indices(tmp_path):
     data = _middle([[], [{"bbox": [1, 2, 3, 4], "type": "text", "lines": [{"spans": [{"type": "text", "content": "q"}]}]}]])
     mid = tmp_path / "m_middle.json"

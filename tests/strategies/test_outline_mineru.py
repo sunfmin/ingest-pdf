@@ -37,6 +37,13 @@ def _span(content, type="text"):
     return {"type": type, "content": content}
 
 
+def _image(path, caption=""):
+    blocks = [{"type": "image_body", "lines": [{"spans": [{"type": "image", "image_path": path}]}]}]
+    if caption:
+        blocks.append({"type": "image_caption", "lines": [{"spans": [{"type": "text", "content": caption}]}]})
+    return {"type": "image", "blocks": blocks, "lines": []}
+
+
 def _middle(pages):
     return {"pdf_info": [{"para_blocks": b} for b in pages]}
 
@@ -94,6 +101,12 @@ def test_heading_is_harvestable_by_outline(tmp_path):
     assert outline.section_of_page(mu.page_markdown(mid)[0]) == (1, "1.2", "集合间的基本关系")
 
 
+def test_image_block_becomes_figure_ref(tmp_path):
+    mid = _write_middle(tmp_path, [[_title("1.3 x"), _image("abc123.jpg", "图1.3-1"), _text(_span("body"))]])
+    assert mu.page_markdown(mid)[0] == "# 1.3 x\n\n![图1.3-1](page-0001.fig-1.jpg)\n\nbody"
+    assert mu.page_figures(mid) == {0: [("page-0001.fig-1.jpg", "abc123.jpg")]}
+
+
 # ── end-to-end through the pipeline: tree built, zero VLM ─────────────────────────
 
 
@@ -131,7 +144,7 @@ def test_outline_mineru_pipeline_builds_tree_zero_vlm(tmp_path, monkeypatch):
     middle = tmp_path / "fixture_middle.json"
     _fixture_middle(middle)
 
-    monkeypatch.setattr(mu, "run_mineru", lambda pdf_, cache, log=print: middle)
+    monkeypatch.setattr(mu, "run_mineru", lambda pdf_, cache, log=print, pages=None: middle)
     monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"
@@ -171,7 +184,7 @@ def test_outline_no_sections_degrades_to_flat(tmp_path, monkeypatch):
     _build_pdf(pdf, 2)
     middle = _write_middle(tmp_path, [[_text(_span("just prose"))], [_text(_span("more prose"))]])
 
-    monkeypatch.setattr(mu, "run_mineru", lambda p, cache, log=print: middle)
+    monkeypatch.setattr(mu, "run_mineru", lambda p, cache, log=print, pages=None: middle)
     monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"
@@ -182,3 +195,36 @@ def test_outline_no_sections_degrades_to_flat(tmp_path, monkeypatch):
     assert (base / "page-0001.md").exists() and (base / "page-0002.md").exists()  # flat
     assert not (base / "front").exists()          # no front bucket
     assert not list(base.glob("第*章"))            # no chapter tree
+
+
+def test_figures_are_copied_and_move_with_the_page(tmp_path, monkeypatch):
+    """A page's inlined figure is copied out under a page-scoped name and moved into the
+    section dir alongside its page by finalize (ADR-0010 figure inlining)."""
+    pdf = tmp_path / "book.pdf"
+    _build_pdf(pdf, 2)
+    md_dir = tmp_path / "mineru"
+    (md_dir / "images").mkdir(parents=True)
+    (md_dir / "images" / "venn.jpg").write_bytes(b"\xff\xd8fake-jpg-bytes")
+    middle = md_dir / "book_middle.json"
+    middle.write_text(
+        json.dumps(
+            _middle(
+                [
+                    [_text(_span("intro, no section"))],  # p0 → front
+                    [_title("1.3 集合的基本运算"), _image("venn.jpg", "图1.3-1"), _text(_span("并集"))],  # p1 → 1.3
+                ]
+            )
+        ),
+        "utf-8",
+    )
+    monkeypatch.setattr(mu, "run_mineru", lambda p, cache, log=print, pages=None: middle)
+    monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
+
+    out_root = tmp_path / "out"
+    counters = pipeline.run([pdf], out_root, "outline", _FakeVLM(), log=lambda *_: None)
+    assert counters == {"done": 2, "failed": 0, "skipped": 0}
+
+    secdir = out_root / "book" / "第1章" / "1.3-集合的基本运算"
+    fig = secdir / "page-0002.fig-1.jpg"
+    assert fig.exists() and fig.read_bytes() == b"\xff\xd8fake-jpg-bytes"  # copied + moved with page
+    assert "![图1.3-1](page-0002.fig-1.jpg)" in (secdir / "page-0002.md").read_text("utf-8")

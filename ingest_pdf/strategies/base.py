@@ -3,16 +3,15 @@
 A strategy maps a PDF into pipeline PageJobs, says where each page's full render
 lands, and turns a page's VLM result into the Units to persist.
 
-Optional attributes (read by the pipeline via getattr; a strategy that omits them
-gets the VLM-driven defaults — keeps Page/Outline unchanged, ADR-0006):
+Every strategy transcribes via MinerU (the sole engine, ADR-0010); emit() supplies the
+Units, so the pipeline never calls a VLM.
 
-    needs_vlm: bool = True
-        False → the pipeline skips the per-page VLM call for this strategy's jobs
-        (the strategy supplies its own segmentation + transcription, e.g. MinerU).
+Optional attributes (read by the pipeline via getattr):
+
     model_id:  str | None = None
     revision:  str | None = None
         The model that produced this strategy's segmentation + transcription, for
-        provenance. None → fall back to the VLM's id/revision.
+        provenance. None → fall back to the NoVLM sentinel's ("none").
     finalize(out_dir, manifest, pdf_key, log) -> None   (module-level, optional)
         A whole-PDF post-pass run after the page loop (e.g. Outline's tree build,
         Question's cross-page assembly). The pipeline collects strategies that
@@ -42,11 +41,15 @@ def strip_header(md: str) -> str:
 class Strategy(Protocol):
     name: str
 
-    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement) -> list[PageJob]:
+    def plan(
+        self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement, pages=None
+    ) -> list[PageJob]:
         """Enumerate the pages to process and where their Units live.
 
         ``placement`` (resolved once per PDF by the pipeline) supplies the destination
         directory + scratch cache, so the strategy no longer computes ``out_root/stem``.
+        ``pages`` (a 1-based --pages filter, or None) lets a MinerU-backed strategy run the
+        transcriber on only those pages instead of the whole PDF.
         """
         ...
 

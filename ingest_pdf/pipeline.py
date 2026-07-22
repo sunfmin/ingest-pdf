@@ -1,15 +1,13 @@
-"""The warm-model pipeline (ADR-0001).
+"""The render→write pipeline (ADR-0001, simplified by ADR-0010).
 
-Shape: a pool of render threads → a single VLM worker thread → a pool of writer
-threads, joined by two bounded queues. The single VLM slot models the one-GPU
-throughput ceiling; the bounded render→vlm queue applies backpressure so we
-don't render hundreds of pages ahead of the model. Rendering and disk writes
-overlap inference, keeping the (future real) GPU saturated.
+Shape: a pool of render threads → a pool of writer threads, joined by one bounded queue.
+Rendering (CPU) overlaps disk writes; the bounded write queue applies backpressure so we
+don't render hundreds of pages ahead of the writers.
 
-Since ADR-0010 MinerU is the sole transcriber and every strategy is zero-VLM, so the VLM
-worker thread below always takes the skip path (the vlm arg is a NoVLM sentinel, kept only
-for top-level provenance). The thread stays as a vestigial passthrough; the render→write
-plumbing — resume, provenance, colocated Unit pairs — is unchanged.
+Transcription is owned by each strategy's emit() (MinerU, zero project VLM — ADR-0006/0010),
+so there is no in-process VLM stage: ADR-0001's single warm-VLM worker thread was removed
+once MinerU became the sole transcriber. The `vlm` arg is a NoVLM sentinel kept only for the
+manifest's top-level provenance id; its transcribe() is never called.
 """
 
 from __future__ import annotations
@@ -31,10 +29,9 @@ from .render import render_page
 from .strategies.detect import get_strategy
 
 _SENTINEL = None
-# A strategy with needs_vlm=False (e.g. Question/MinerU) owns its own segmentation +
-# transcription, so the VLM slot is intentionally bypassed for its pages. This sentinel
-# is distinct from None (which means the VLM call *failed*) so the writer records success.
-_VLM_SKIP = object()
+# The strategy owns transcription in emit() (MinerU, ADR-0010), so the writer hands it an
+# empty PageResult — emit ignores it and supplies its own Units. A render failure is carried
+# as a None RenderedPage on write_q (the writer marks that page failed).
 _EMPTY_PAGE_RESULT = PageResult(markdown="", questions=[])
 
 
@@ -100,7 +97,9 @@ def run(
             _mrev = getattr(strat, "revision", None) or vlm.revision
             manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
             local = []
-            for job in strat.plan(doc, pdf, pdf_key, placement):
+            # pages is passed into plan() so MinerU-backed strategies transcribe only the
+            # requested pages; the post-filter still guards any strategy that ignores it.
+            for job in strat.plan(doc, pdf, pdf_key, placement, pages=pages):
                 if pages and (job.page_index + 1) not in pages:
                     continue
                 local.append((job, strat))
@@ -137,10 +136,10 @@ def run(
         _finalize()  # a fully-resumed run still (idempotently) runs each strategy's finalize
         return counters
 
-    # ── Queues ──
+    # ── Queues: render workers feed writers directly (no VLM stage — MinerU is the sole
+    # transcriber, owned by each strategy's emit(); ADR-0010). write_q is bounded for backpressure.
     job_q: queue.Queue = queue.Queue()  # (job, strat) + render sentinels
-    render_q: queue.Queue = queue.Queue(maxsize=2 * n_render)  # (job, strat, RenderedPage|None); backpressure
-    write_q: queue.Queue = queue.Queue(maxsize=64)  # (job, strat, rendered, result|None)
+    write_q: queue.Queue = queue.Queue(maxsize=64)  # (job, strat, RenderedPage|None) + writer sentinels
 
     for item in todo:
         job_q.put(item)
@@ -156,49 +155,25 @@ def run(
             try:
                 png = strat.render_target(job)
                 w, h = render_page(job.pdf_path, job.page_index, dpi, png)
-                render_q.put((job, strat, RenderedPage(job, png, w, h)))
+                write_q.put((job, strat, RenderedPage(job, png, w, h)))
             except Exception as e:  # keep the batch alive; the page is marked failed downstream
-                render_q.put((job, strat, None))
+                write_q.put((job, strat, None))
                 log(f"  ✗ render {job.pdf_path.name} p{job.page_index + 1}: {e}")
-
-    def vlm_worker() -> None:
-        while True:
-            item = render_q.get()
-            if item is _SENTINEL:
-                for _ in range(n_writers):
-                    write_q.put(_SENTINEL)
-                return
-            job, strat, rendered = item
-            if rendered is None:
-                write_q.put((job, strat, None, None))
-                continue
-            if not getattr(strat, "needs_vlm", True):
-                write_q.put((job, strat, rendered, _VLM_SKIP))  # zero-VLM path (ADR-0006)
-                continue
-            try:
-                result = vlm.transcribe(rendered)
-                write_q.put((job, strat, rendered, result))
-            except Exception as e:
-                write_q.put((job, strat, rendered, None))
-                log(f"  ✗ vlm {job.pdf_path.name} p{job.page_index + 1}: {e}")
 
     def writer() -> None:
         while True:
             item = write_q.get()
             if item is _SENTINEL:
                 return
-            job, strat, rendered, result = item
-            if result is None:
+            job, strat, rendered = item
+            if rendered is None:  # render failed
                 manifest.mark_page(job.pdf_key, job.page_index, "failed", [])
                 with clock:
                     counters["failed"] += 1
                 continue
-            # _VLM_SKIP = success without a VLM result; the strategy supplies its own
-            # data and ignores the (empty) PageResult we hand to emit.
-            emit_result = _EMPTY_PAGE_RESULT if result is _VLM_SKIP else result
             try:
-                # Provenance per Unit follows the strategy's model when it owns
-                # segmentation+transcription (zero-VLM Question), else the VLM.
+                # Provenance per Unit = the strategy's own model (MinerU); the vlm sentinel
+                # supplies only the top-level fallback id (NoVLM → "none").
                 ctx = RunContext(
                     dpi,
                     getattr(strat, "model_id", None) or vlm.model_id,
@@ -206,7 +181,7 @@ def run(
                     strat.name,
                 )
                 recs = []
-                for u in strat.emit(rendered, emit_result):
+                for u in strat.emit(rendered, _EMPTY_PAGE_RESULT):
                     md_path = job.out_dir / f"{u.name}.md"
                     md_path.parent.mkdir(parents=True, exist_ok=True)
                     md_path.write_text(header(ctx, job.pdf_path, u) + u.md_body, "utf-8")
@@ -230,16 +205,15 @@ def run(
                 log(f"  ✗ write {job.pdf_path.name} p{job.page_index + 1}: {e}")
 
     renderers = [threading.Thread(target=render_worker, daemon=True, name=f"render-{i}") for i in range(n_render)]
-    vlm_thread = threading.Thread(target=vlm_worker, daemon=True, name="vlm")
     writers = [threading.Thread(target=writer, daemon=True, name=f"writer-{i}") for i in range(n_writers)]
-    for t in (*renderers, vlm_thread, *writers):
+    for t in (*renderers, *writers):
         t.start()
 
     try:
         for t in renderers:
             t.join()
-        render_q.put(_SENTINEL)  # no more rendered pages; tell the VLM worker to drain + close
-        vlm_thread.join()
+        for _ in range(n_writers):
+            write_q.put(_SENTINEL)  # renders done; tell writers to drain + close
         for t in writers:
             t.join()
         _finalize()  # outline tree (ADR-0004) / question cross-page assembly (ADR-0006)

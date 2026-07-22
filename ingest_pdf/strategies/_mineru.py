@@ -194,23 +194,9 @@ def _http_parse_zip(api_url: str, pdf: Path, out_dir: Path, log: Callable[[str],
     return middle
 
 
-def run_mineru(
-    pdf: Path,
-    cache_dir: Path,
-    log: Callable[[str], None] = print,
-) -> Path:
-    """Run MinerU on `pdf` (idempotent) → path of the produced *_middle.json.
-
-    Skips the subprocess when a middle.json already exists and is at least as new as
-    the PDF. Raises SystemExit with install instructions if mineru is unavailable.
-    """
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    out_dir = cache_dir / "mineru_out"
-    existing = _find_middle(out_dir)
-    if existing and existing.stat().st_mtime >= pdf.stat().st_mtime:
-        log(f"  · mineru cache hit: {existing.name}")
-        return existing
-
+def _produce_middle(pdf: Path, out_dir: Path, log: Callable[[str], None]) -> Path:
+    """Run MinerU on `pdf` into `out_dir` (warm API if MINERU_API_URL, else CLI) → its
+    *_middle.json. No cache check — the caller decides when to reuse."""
     api_url = os.environ.get("MINERU_API_URL")
     if api_url:  # warm-server fast path; any failure falls through to the CLI below
         try:
@@ -235,6 +221,73 @@ def run_mineru(
     if middle is None:
         raise RuntimeError(f"mineru produced no *_middle.json under {out_dir}")
     return middle
+
+
+def _run_subset(pdf: Path, cache_dir: Path, sel: list[int], log: Callable[[str], None]) -> Path:
+    """Run MinerU on just the 0-based page indices `sel` (a --pages filter). Slices those
+    pages into a temp PDF, runs MinerU on the slice, then **remaps** the slice's pdf_info back
+    to original page indices (padding skipped pages with empty blocks) so page_markdown /
+    parse_blocks key by original index. The remapped middle.json sits beside the slice's
+    images/ dir, so figure `image_path`s still resolve. Not cached (a testing convenience)."""
+    import fitz
+
+    src = fitz.open(pdf)
+    try:
+        sel = [i for i in sel if 0 <= i < src.page_count]
+        out_dir = cache_dir / "mineru_subset"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not sel:
+            empty = out_dir / f"{pdf.stem}.subset_middle.json"
+            empty.write_text(json.dumps({"pdf_info": []}), "utf-8")
+            return empty
+        slice_pdf = out_dir / f"{pdf.stem}.subset.pdf"
+        sub = fitz.open()
+        try:
+            for i in sel:
+                sub.insert_pdf(src, from_page=i, to_page=i)
+            sub.save(slice_pdf)
+        finally:
+            sub.close()
+    finally:
+        src.close()
+
+    middle = _produce_middle(slice_pdf, out_dir, log)
+    data = json.loads(middle.read_text("utf-8"))
+    sliced = data.get("pdf_info", [])
+    full: list[dict] = [{"para_blocks": []} for _ in range(max(sel) + 1)]
+    for k, orig in enumerate(sel):
+        if k < len(sliced):
+            full[orig] = sliced[k]
+    data["pdf_info"] = full
+    remapped = middle.with_name(middle.stem + ".remapped.json")  # same dir → images/ resolves
+    remapped.write_text(json.dumps(data, ensure_ascii=False), "utf-8")
+    log(f"  · mineru --pages subset: {len(sel)} page(s), remapped to original indices")
+    return remapped
+
+
+def run_mineru(
+    pdf: Path,
+    cache_dir: Path,
+    log: Callable[[str], None] = print,
+    pages: set[int] | None = None,
+) -> Path:
+    """Run MinerU on `pdf` (idempotent) → path of the produced *_middle.json.
+
+    Skips the subprocess when a middle.json already exists and is at least as new as the
+    PDF. With `pages` (a 1-based --pages filter), MinerU runs on only those pages (sliced +
+    index-remapped, uncached). Raises SystemExit with install instructions if mineru is
+    unavailable.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if pages:
+        return _run_subset(pdf, cache_dir, sorted(p - 1 for p in pages), log)
+
+    out_dir = cache_dir / "mineru_out"
+    existing = _find_middle(out_dir)
+    if existing and existing.stat().st_mtime >= pdf.stat().st_mtime:
+        log(f"  · mineru cache hit: {existing.name}")
+        return existing
+    return _produce_middle(pdf, out_dir, log)
 
 
 def _span_text(span: dict) -> str:
@@ -289,15 +342,11 @@ def parse_blocks(middle: Path) -> dict[int, list[MBlock]]:
 
 
 def _block_markdown(blk: dict) -> str:
-    typ = blk.get("type", "text")
-    if typ == "image":
-        # The figure is preserved in the full-page Unit image; inlining MinerU's cropped
-        # figure into the Markdown is a documented follow-up (ADR-0009), not v1.
-        return ""
+    """Markdown for a non-image para_block (image blocks are handled inline in page_markdown)."""
     text = _block_text(blk).strip()
     if not text:
         return ""
-    if typ == "title":
+    if blk.get("type") == "title":
         level = blk.get("level") or 1
         try:
             level = max(1, min(int(level), 6))
@@ -307,18 +356,77 @@ def _block_markdown(blk: dict) -> str:
     return text
 
 
+def _image_of(blk: dict) -> tuple[str, str] | None:
+    """(image_path, caption) for a MinerU image block, else None. The path is the figure's
+    filename inside MinerU's `images/` dir; the caption is any `image_caption` sub-block text."""
+    path: str | None = None
+    caption = ""
+    for sub in blk.get("blocks", []):
+        is_caption = sub.get("type") == "image_caption"
+        for line in sub.get("lines", []):
+            for sp in line.get("spans", []):
+                if sp.get("type") == "image" and sp.get("image_path"):
+                    path = sp["image_path"]
+                elif is_caption:
+                    caption += sp.get("content", "") or ""
+    return (path, caption.strip()) if path else None
+
+
+def _fig_dest(page_index: int, k: int, src: str) -> str:
+    """Page-scoped figure filename, e.g. page-0017.fig-1.jpg — colocated with the page's md
+    (so `![](…)` refs stay valid), and moved as a set by outline.finalize."""
+    ext = Path(src).suffix or ".jpg"
+    return f"page-{page_index + 1:04d}.fig-{k + 1}{ext}"
+
+
 def page_markdown(middle: Path) -> dict[int, str]:
-    """middle.json → {page_index: markdown}, in reading order (ADR-0009, Outline path).
+    """middle.json → {page_index: markdown}, in reading order (ADR-0009/0010, Page/Outline).
 
     One paragraph per para_block; a `title` block becomes a `#` heading (so
     ``outline.section_of_page`` can read the section number), formula spans keep their
-    ``$…$`` / ``$$…$$`` wrap (via ``_block_text``), and image blocks are skipped.
+    ``$…$`` / ``$$…$$`` wrap (via ``_block_text``), and an image block becomes a Markdown
+    image referencing its page-scoped figure filename (copied out by the strategy's emit).
     """
     data = json.loads(middle.read_text("utf-8"))
     out: dict[int, str] = {}
     for pi, page in enumerate(data.get("pdf_info", [])):
-        parts = [md for blk in page.get("para_blocks", []) if (md := _block_markdown(blk))]
+        parts: list[str] = []
+        fig_k = 0
+        for blk in page.get("para_blocks", []):
+            if blk.get("type") == "image":
+                got = _image_of(blk)
+                if got:
+                    src, caption = got
+                    parts.append(f"![{caption}]({_fig_dest(pi, fig_k, src)})")
+                    fig_k += 1
+                continue
+            md = _block_markdown(blk)
+            if md:
+                parts.append(md)
         out[pi] = "\n\n".join(parts)
+    return out
+
+
+def page_figures(middle: Path) -> dict[int, list[tuple[str, str]]]:
+    """middle.json → {page_index: [(dest_filename, source_filename), ...]} (ADR-0010).
+
+    dest_filename is the page-scoped name page_markdown referenced; source_filename is the
+    figure inside MinerU's `images/` dir. The strategy's emit copies each source→dest into
+    the Unit dir so the Markdown's `![](…)` resolves.
+    """
+    data = json.loads(middle.read_text("utf-8"))
+    out: dict[int, list[tuple[str, str]]] = {}
+    for pi, page in enumerate(data.get("pdf_info", [])):
+        figs: list[tuple[str, str]] = []
+        k = 0
+        for blk in page.get("para_blocks", []):
+            if blk.get("type") == "image":
+                got = _image_of(blk)
+                if got:
+                    figs.append((_fig_dest(pi, k, got[0]), got[0]))
+                    k += 1
+        if figs:
+            out[pi] = figs
     return out
 
 

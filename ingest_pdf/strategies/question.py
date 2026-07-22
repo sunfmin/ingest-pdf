@@ -225,7 +225,6 @@ class QuestionStrategy:
     """Exam path: MinerU segmentation + transcription, no VLM (ADR-0006)."""
 
     name = "question"
-    needs_vlm = False
 
     def __init__(self) -> None:
         mid, rev = _mineru.model_identity()
@@ -236,9 +235,9 @@ class QuestionStrategy:
 
     # ── Strategy protocol ────────────────────────────────────────────────────────
 
-    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement) -> list[PageJob]:
+    def plan(self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement, pages=None) -> list[PageJob]:
         cache = placement.cache_dir
-        middle = _mineru.run_mineru(pdf_path, cache)
+        middle = _mineru.run_mineru(pdf_path, cache, pages=pages)
         per_page = _mineru.parse_blocks(middle)
         stream = [(pi, b) for pi in sorted(per_page) for b in per_page[pi]]
         questions = group_questions(stream)
