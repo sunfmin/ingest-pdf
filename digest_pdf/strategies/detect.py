@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple, Optional
 
 import fitz
 
@@ -18,6 +19,9 @@ from .base import Strategy
 from .outline import OutlineStrategy
 from .page import PageStrategy
 from .question import QuestionStrategy
+
+if TYPE_CHECKING:
+    from ..layout import LayoutSpec, Match
 
 # 大题头 section header: "一、选择题 …" (the exam sentinel; textbooks use 第一章, no 、).
 _SECTION = re.compile(r"^[一二三四五六七八九十]+、")
@@ -63,3 +67,23 @@ def get_strategy(name: str, doc: "fitz.Document", pdf_path: Path) -> Strategy:
     if name == "question":
         return QuestionStrategy()
     raise ValueError(f"unknown strategy: {name!r}")
+
+
+class ResolvedStrategy(NamedTuple):
+    """The Segmentation Strategy to run for one PDF, plus the Layout Spec rule it matched
+    (None when there is no spec or no rule matched). Callers derive placement / report the
+    layout status from the same ``match``."""
+
+    strategy: Strategy
+    match: "Optional[Match]"
+
+
+def resolve_strategy(spec: "Optional[LayoutSpec]", pdf_path: Path, doc: "fitz.Document", fallback: str) -> ResolvedStrategy:
+    """Resolve which strategy runs for ``pdf_path`` — the single seam both ``--inspect``
+    (preview) and the pipeline (execute) go through, so the plan preview cannot diverge from
+    the run (ADR-0008). A matching Layout Spec rule pins the strategy; otherwise ``fallback``
+    (the CLI ``--strategy``) is used, and ``auto`` still auto-detects. The matched rule (or
+    None) rides along so the caller resolves placement / layout status from the same match."""
+    match = spec.match(pdf_path.stem) if spec is not None else None
+    strat = get_strategy(match.rule.strategy if match else fallback, doc, pdf_path)
+    return ResolvedStrategy(strat, match)

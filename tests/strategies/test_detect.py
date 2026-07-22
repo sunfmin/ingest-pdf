@@ -72,3 +72,44 @@ def test_page_has_no_post_pass_outline_and_question_do():
     assert get_strategy("page", None, Path("x.pdf")).finalize is None
     assert callable(get_strategy("outline", None, Path("x.pdf")).finalize)
     assert callable(get_strategy("question", None, Path("x.pdf")).finalize)
+
+
+# ── resolve_strategy: the one seam --inspect and the pipeline share (no drift) ────
+
+
+class _FakeMatch:
+    def __init__(self, strategy: str) -> None:
+        self.rule = type("_Rule", (), {"strategy": strategy})()
+
+
+class _FakeSpec:
+    """Minimal stand-in for LayoutSpec: match(stem) returns a preset Match (or None)."""
+
+    def __init__(self, match) -> None:
+        self._match = match
+
+    def match(self, stem: str):
+        return self._match
+
+
+def test_resolve_uses_fallback_when_no_spec():
+    from digest_pdf.strategies.detect import resolve_strategy
+
+    res = resolve_strategy(None, Path("x.pdf"), None, "page")
+    assert res.strategy.name == "page" and res.match is None
+
+
+def test_resolve_matched_rule_pins_strategy_over_fallback():
+    from digest_pdf.strategies.detect import resolve_strategy
+
+    m = _FakeMatch("question")
+    res = resolve_strategy(_FakeSpec(m), Path("真题-2016.pdf"), None, "page")
+    # the rule wins over the --strategy fallback; the match rides along for placement/report
+    assert res.strategy.name == "question" and res.match is m
+
+
+def test_resolve_unmatched_falls_back():
+    from digest_pdf.strategies.detect import resolve_strategy
+
+    res = resolve_strategy(_FakeSpec(None), Path("x.pdf"), None, "outline")
+    assert res.strategy.name == "outline" and res.match is None

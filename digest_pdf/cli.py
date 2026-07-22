@@ -56,7 +56,7 @@ def run_inspect(args: argparse.Namespace) -> int:
 
     from . import layout
     from .pipeline import _iter_pdfs
-    from .strategies.detect import get_strategy
+    from .strategies.detect import resolve_strategy
 
     try:
         spec = layout.load_spec(Path(args.layout) if args.layout else None)
@@ -68,9 +68,9 @@ def run_inspect(args: argparse.Namespace) -> int:
     for pdf in _iter_pdfs([Path(p) for p in args.inputs]):
         doc = fitz.open(pdf)
         try:
-            m = spec.match(pdf.stem) if spec else None
-            # When a rule matches it pins the strategy; report what would actually run.
-            strat = get_strategy(m.rule.strategy if m else args.strategy, doc, pdf)
+            # Same resolution seam the pipeline runs through, so --inspect reports exactly
+            # what would run (ADR-0008): a matching rule pins the strategy; else --strategy.
+            strat, m = resolve_strategy(spec, pdf, doc, args.strategy)
             name = strat.name
             if spec is None:
                 lay = {"status": "no-spec"}

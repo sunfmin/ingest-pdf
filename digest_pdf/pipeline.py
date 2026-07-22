@@ -26,7 +26,7 @@ from .models import RenderedPage, RunContext
 from .placement import resolve_placement
 from .provenance import header
 from .render import render_page
-from .strategies.detect import get_strategy
+from .strategies.detect import resolve_strategy
 
 _SENTINEL = None
 # A render failure is carried as a None RenderedPage on write_q (the writer marks that
@@ -70,7 +70,7 @@ def run(
 
     # ── Plan across all PDFs, in parallel (each job carries its resolved strategy) ──
     # Parallelism targets the per-PDF MinerU call inside plan() — the batch bottleneck for
-    # the Question strategy. Safe because get_strategy() builds a fresh strategy instance
+    # the Question strategy. Safe because resolve_strategy() builds a fresh strategy instance
     # per PDF (so per-strategy state like _pages never crosses PDFs), ensure_pdf() locks
     # internally, and per-PDF output dirs / cache dirs are disjoint. With a warm MinerU
     # server (MINERU_API_URL) the parallel submits overlap against one model load.
@@ -81,10 +81,10 @@ def run(
     def plan_pdf(pdf: Path) -> None:
         doc = fitz.open(pdf)
         try:
-            # A matching Layout Spec rule pins both the strategy and the placement (ADR-0008);
-            # otherwise fall back to the CLI strategy + historical <out_root>/<stem>.
-            m = spec.match(pdf.stem) if spec is not None else None
-            strat = get_strategy(m.rule.strategy if m else strategy_name, doc, pdf)
+            # Resolve strategy + matched rule through the one seam --inspect also uses, so the
+            # plan preview can't diverge from this run (ADR-0008). A matching rule pins the
+            # strategy; else the CLI strategy. Placement derives from the same match below.
+            strat, m = resolve_strategy(spec, pdf, doc, strategy_name)
             pdf_key = str(pdf.resolve())
             placement = resolve_placement(pdf, out_root, m)  # the single 'where' seam (ADR-0008)
             # Per-PDF provenance model = "id@revision", the strategy's own MinerU model
