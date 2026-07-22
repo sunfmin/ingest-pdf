@@ -89,3 +89,24 @@ def test_run_without_out_errors(tmp_path):
     _mk(pdf, ["1. x"])
     with pytest.raises(SystemExit):
         main([str(pdf)])  # neither --out nor --inspect/--install-mineru
+
+
+# ── readiness / warm-server CLI actions (skill uses these instead of cache paths) ──
+
+
+def test_mineru_status_exit_code_tracks_installed(monkeypatch):
+    import digest_pdf.strategies._mineru as mu
+
+    monkeypatch.setattr(mu, "mineru_installed", lambda: True)
+    assert main(["--mineru-status"]) == 0  # no inputs needed; standalone action
+    monkeypatch.setattr(mu, "mineru_installed", lambda: False)
+    assert main(["--mineru-status"]) == 1
+
+
+def test_serve_mineru_dispatches_with_port(monkeypatch):
+    import digest_pdf.strategies._mineru as mu
+
+    calls = []
+    monkeypatch.setattr(mu, "serve_mineru", lambda port=8765: calls.append(port) or 7)
+    assert main(["--serve-mineru", "--port", "9999"]) == 7  # returns serve_mineru's rc
+    assert calls == [9999]

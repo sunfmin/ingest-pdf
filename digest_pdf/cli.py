@@ -115,6 +115,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="one-time setup: build the isolated MinerU venv + download models (ADR-0006); then exit",
     )
     ap.add_argument(
+        "--mineru-status",
+        action="store_true",
+        help="exit 0 if MinerU is installed, 1 if not (readiness gate; no cache path to stat); then exit",
+    )
+    ap.add_argument(
+        "--serve-mineru",
+        action="store_true",
+        help="run the warm mineru-api server (models stay loaded across a batch); execs until killed",
+    )
+    ap.add_argument(
         "--inspect",
         action="store_true",
         help="probe each PDF's structure (strategy/pages/estimate) as JSON; no MinerU/VLM; then exit",
@@ -131,6 +141,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         choices=["auto", "page", "outline", "question"],
         help="segmentation strategy (default: auto; all strategies transcribe via MinerU, ADR-0010)",
     )
+    ap.add_argument("--port", type=int, default=8765, help="port for --serve-mineru (default 8765)")
     ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
     ap.add_argument("--pages", default=None, help="1-based page filter, e.g. '1-4,7' (handy for testing)")
@@ -142,8 +153,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         install_mineru()
         return 0
 
+    if args.mineru_status:
+        from .strategies._mineru import mineru_installed
+
+        return 0 if mineru_installed() else 1
+
+    if args.serve_mineru:
+        from .strategies._mineru import serve_mineru
+
+        return serve_mineru(port=args.port)
+
     if not args.inputs:
-        ap.error("the following arguments are required: inputs (or pass --inspect / --install-mineru)")
+        ap.error(
+            "the following arguments are required: inputs "
+            "(or pass --inspect / --install-mineru / --mineru-status / --serve-mineru)"
+        )
 
     if args.inspect:
         return run_inspect(args)

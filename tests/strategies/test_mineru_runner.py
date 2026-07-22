@@ -129,6 +129,54 @@ def test_find_bin_none_when_absent(monkeypatch, tmp_path):
     assert mu.find_mineru_bin() is None
 
 
+# ── mineru_installed / serve_mineru: readiness gate + warm-server startup ────────
+
+
+def test_mineru_installed_true_via_managed_venv(monkeypatch, tmp_path):
+    monkeypatch.delenv("MINERU_BIN", raising=False)
+    fake = tmp_path / "mineru"
+    fake.write_text("")
+    monkeypatch.setattr(mu, "MINERU_BIN_PATH", fake)
+    assert mu.mineru_installed() is True
+
+
+def test_mineru_installed_true_via_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINERU_BIN", "/custom/mineru")
+    monkeypatch.setattr(mu, "MINERU_BIN_PATH", tmp_path / "nope")
+    assert mu.mineru_installed() is True
+
+
+def test_mineru_installed_false_when_absent(monkeypatch, tmp_path):
+    monkeypatch.delenv("MINERU_BIN", raising=False)
+    monkeypatch.setattr(mu, "MINERU_BIN_PATH", tmp_path / "missing")
+    assert mu.mineru_installed() is False
+
+
+def test_serve_mineru_returns_2_when_not_installed(monkeypatch, tmp_path):
+    monkeypatch.setattr(mu, "MINERU_API_BIN_PATH", tmp_path / "missing")
+    execve = Mock()
+    monkeypatch.setattr("os.execve", execve)
+    assert mu.serve_mineru(port=8765, log=lambda *_: None) == 2
+    execve.assert_not_called()  # never exec when MinerU is absent
+
+
+def test_serve_mineru_execs_api_with_config_env(monkeypatch, tmp_path):
+    api = tmp_path / "mineru-api"
+    api.write_text("")
+    monkeypatch.setattr(mu, "MINERU_API_BIN_PATH", api)
+    monkeypatch.setattr(mu, "MINERU_CONFIG_PATH", tmp_path / "mineru.json")
+    execve = Mock()
+    monkeypatch.setattr("os.execve", execve)
+
+    mu.serve_mineru(port=9999, log=lambda *_: None)
+
+    execve.assert_called_once()
+    path, argv, env = execve.call_args.args
+    assert path == str(api)
+    assert argv == [str(api), "--host", "127.0.0.1", "--port", "9999"]
+    assert env["MINERU_TOOLS_CONFIG_JSON"] == str(tmp_path / "mineru.json")
+
+
 # ── run_mineru: idempotency + config/env wiring ─────────────────────────────────
 
 

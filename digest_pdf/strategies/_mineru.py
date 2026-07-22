@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -27,6 +28,7 @@ from typing import Callable
 CACHE_ROOT = Path.home() / ".cache" / "digest-pdf"
 MINERU_VENV = CACHE_ROOT / "mineru-venv"
 MINERU_BIN_PATH = MINERU_VENV / "bin" / "mineru"
+MINERU_API_BIN_PATH = MINERU_VENV / "bin" / "mineru-api"  # warm HTTP server (`digest --serve-mineru`)
 MINERU_CONFIG_PATH = CACHE_ROOT / "mineru.json"
 _MODELSCOPE_CONFIG = {"model-source": "modelscope"}
 
@@ -70,6 +72,38 @@ def find_mineru_bin() -> list[str] | None:
     if MINERU_BIN_PATH.exists():
         return [str(MINERU_BIN_PATH)]
     return None
+
+
+def mineru_installed() -> bool:
+    """True when MinerU is available — the managed venv binary exists, or $MINERU_BIN
+    points at an external install. Cheap: no subprocess, no network. Backs the
+    `digest --mineru-status` readiness gate so callers never stat a cache path."""
+    return bool(os.environ.get("MINERU_BIN")) or MINERU_BIN_PATH.exists()
+
+
+def serve_mineru(port: int = 8765, log: Callable[[str], None] = print) -> int:
+    """Exec the managed ``mineru-api`` warm server on 127.0.0.1:``port``.
+
+    A warm server keeps the models resident across a whole batch (the per-PDF cold
+    load is the slow part); the pipeline's runner talks to it via ``MINERU_API_URL``.
+    The tool owns the venv + modelscope-config paths, so an orchestrator only needs to
+    background this and poll ``/health`` — it never hardcodes a cache directory.
+
+    Returns 2 with install guidance if MinerU isn't installed. On success it does not
+    return: the process image is replaced by ``mineru-api``, so a backgrounded caller's
+    PID *is* the server and a plain ``kill`` tears it down cleanly."""
+    if not MINERU_API_BIN_PATH.exists():
+        print("MinerU is not installed — run `digest --install-mineru` first.", file=sys.stderr)
+        return 2
+    env = dict(os.environ)
+    env["MINERU_TOOLS_CONFIG_JSON"] = str(MINERU_CONFIG_PATH)
+    log(f"serving mineru-api at http://127.0.0.1:{port}  (export MINERU_API_URL to this)")
+    sys.stdout.flush()
+    os.execve(
+        str(MINERU_API_BIN_PATH),
+        [str(MINERU_API_BIN_PATH), "--host", "127.0.0.1", "--port", str(port)],
+        env,
+    )
 
 
 def mineru_pkg_version() -> str:
