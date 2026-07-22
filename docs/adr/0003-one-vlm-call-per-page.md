@@ -1,5 +1,7 @@
 # One VLM call per page: combined transcription + boundary reporting
 
+> **Moot after ADR-0010**: there is no VLM call anymore — MinerU (zero project VLM) does both segmentation and transcription for every strategy. ADR-0006 already moved the Question path off the VLM; ADR-0010 finished the job for Page/Outline. Historical context.
+
 For a page holding N questions, the tool issues a **single** VLM call that returns both the page's full Markdown+LaTeX transcription **and** the per-question boundary boxes. The Markdown is then sliced at question numbers and the page image cropped at the boxes — no second recognition pass. Chosen because the single local GPU is the throughput ceiling (ADR-0001), so calls-per-page ≈ wall-clock; one call/page is N× cheaper than transcribing each crop separately.
 
 ## Considered options

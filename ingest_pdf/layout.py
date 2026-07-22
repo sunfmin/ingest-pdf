@@ -34,7 +34,7 @@ SPEC_FILENAME = "layout.yaml"
 
 # The single structural token each Segmentation Strategy can supply for a template's
 # leaf segment. A template's *terminal* segment must carry its strategy's token.
-STRATEGY_TOKEN = {"question": "qno", "page": "page", "outline": "section", "outline-mineru": "section"}
+STRATEGY_TOKEN = {"question": "qno", "page": "page", "outline": "section"}
 STRUCTURAL_TOKENS = set(STRATEGY_TOKEN.values())
 
 _TOKEN_RE = re.compile(r"\{(\w+)\}")

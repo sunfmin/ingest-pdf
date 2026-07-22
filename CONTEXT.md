@@ -13,7 +13,7 @@ The atomic output element — one rendered **image file** paired with one **tran
 _Avoid_: item, chunk, block, entry
 
 **Transcription（转写）**:
-The Markdown-plus-LaTeX text recognized from a Unit's image by the VLM. Same-language recognition of what the image shows, faithful to the source — **not** a cross-language rendering, and richer than plain text OCR (preserves headings, lists, tables, math).
+The Markdown-plus-LaTeX text recognized from a Unit's image by **MinerU** — the sole recognition engine since ADR-0010 (there is no longer a project-managed VLM). Same-language recognition of what the image shows, faithful to the source — **not** a cross-language rendering, and richer than plain text OCR (preserves headings, lists, tables, math).
 _Avoid_: translation（翻译）, OCR, extraction
 
 **Segmentation Strategy（切分策略）**:
@@ -21,13 +21,13 @@ The pluggable, content-derived rule that maps one PDF into a tree of Units — d
 _Avoid_: mode, parser, splitter
 
 **Outline Strategy（章节切分）**:
-The textbook path: pages grouped into a `第N章/<section>/` tree derived from **section numbers parsed out of each page's transcription** (e.g. `6.2.3 向量的数乘运算`), with heading-less pages inheriting the last-seen section; pages are the leaf Units. (The corpus has no PDF bookmarks and is half-scanned, and the VLM won't answer a direct heading question — ADR-0004 — so structure is harvested from the transcription, not a bookmark outline.)
+The textbook path (transcribed by MinerU like every strategy, ADR-0010): pages grouped into a `第N章/<section>/` tree derived from **section numbers parsed out of each page's transcription** (e.g. `6.2.3 向量的数乘运算` — MinerU emits section titles as Markdown `#` headings), with heading-less pages inheriting the last-seen section; pages are the leaf Units. The corpus has no PDF bookmarks and is half-scanned, so structure is harvested from the transcription, not a bookmark outline (ADR-0004). It is also **auto's fallback** (ADR-0010): a doc with **no** section headings degrades to flat `page-NNNN` pairs rather than an empty tree.
 
 **Question Strategy（试题切分）**:
 Segmentation that splits an exam paper into per-question Units by detecting question boundaries. The exam path.
 
 **Page Strategy（页面切分）**:
-Segmentation with one whole page = one Unit, flat under a per-PDF directory. The universal fallback for a PDF with no exploitable structure.
+Segmentation with one whole page = one Unit, flat under a per-PDF directory (transcribed by MinerU, ADR-0010). Since ADR-0010 auto's no-structure fallback is **Outline** (which degrades to flat when it finds no sections), so Page is reached only via an explicit `--strategy page` or a Layout Spec rule — when a guaranteed-flat layout is wanted with no tree attempt.
 
 **Region（区域 / 一页 N 题）**:
 A sub-page crop: one page yielding N Unit images (e.g. several questions printed on one page). A refinement applied on top of the Question Strategy. Crop boundaries are reported by the VLM and snapped to the nearest blank horizontal band of the page image.

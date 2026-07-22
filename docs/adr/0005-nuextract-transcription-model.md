@@ -1,5 +1,7 @@
 # Transcription model: NuExtract3 (revises the default set in ADR-0001)
 
+> **Retired by ADR-0010**: NuExtract3 (and the whole mlx-vlm stack) was retired once a cross-run calibration showed MinerU transcribes textbook pages deterministically (tree identical across 3 runs, per-page similarity 1.000) — beating NuExtract3's own stability. MinerU is now the sole transcriber. The evidence below stands as the historical record of why NuExtract3 was the VLM default while there was one.
+
 ADR-0001 set the default model to `mlx-community/Qwen3-VL-30B-A3B-Instruct-4bit`, chosen partly for its native **grounding** (for the ADR-0003 one-call transcription+boxes plan) and partly for near-30B transcription quality. Re-running Calibration on a wider corpus reverses the transcription half of that choice: the default transcription model is now **`numind/NuExtract3-mlx-8bits`** — an 8-bit, ~4 GB Qwen3.5-VL-based model fine-tuned by NuMind for structured extraction / image→Markdown. It is driven with the **same plain-Markdown transcription prompt** and the same low-temp+repetition-penalty decode (temp≈0.2 still required; temp=0 degenerates identically). Grounding is deliberately **no longer** a property of the default model (see below).
 
 ## Evidence (calibration: 14 pages × 3 independent rounds)

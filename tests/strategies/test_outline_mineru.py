@@ -1,10 +1,12 @@
-"""Outline-via-MinerU (ADR-0009): MinerU transcribes each textbook page and the same
-outline finalize harvests its `#` section headings into the 第N章/<section>/ tree.
+"""Outline via MinerU (ADR-0009/0010): MinerU transcribes each textbook page (Outline now
+subclasses the MinerU-backed PageStrategy) and the outline finalize harvests its `#` section
+headings into the 第N章/<section>/ tree — or leaves the pages flat when a doc has no sections.
 
 No real MinerU / models: page_markdown is exercised on hand-written middle.json, and the
-end-to-end pipeline test monkeypatches run_mineru + model_identity (mirrors the Question
+end-to-end pipeline tests monkeypatch run_mineru + model_identity (mirrors the Question
 integration test). Asserts the zero-VLM bypass, the section headings survive as Markdown
-headings, and the tree (incl. carry-forward + the front bucket) is built.
+headings, the tree (incl. carry-forward + the front bucket) is built, and the graceful
+degrade to flat pages when no section heading is present.
 """
 
 from __future__ import annotations
@@ -134,13 +136,13 @@ def test_outline_mineru_pipeline_builds_tree_zero_vlm(tmp_path, monkeypatch):
 
     out_root = tmp_path / "out"
     vlm = _FakeVLM()
-    counters = pipeline.run([pdf], out_root, "outline-mineru", vlm, log=lambda *_: None)
+    counters = pipeline.run([pdf], out_root, "outline", vlm, log=lambda *_: None)
 
     assert counters == {"done": 4, "failed": 0, "skipped": 0}
     vlm.transcribe.assert_not_called()  # zero-VLM: MinerU owns transcription
 
     rec = json.loads((out_root / "manifest.json").read_text())["pdfs"][str(pdf.resolve())]
-    assert rec["model"] == "mineru@test" and rec["strategy"] == "outline-mineru"
+    assert rec["model"] == "mineru@test" and rec["strategy"] == "outline"
 
     base = out_root / "textbook"
     # tree: front bucket, section dir, carry-forward onto the heading-less page, next section
@@ -160,3 +162,23 @@ def test_outline_mineru_pipeline_builds_tree_zero_vlm(tmp_path, monkeypatch):
     # inline formula on the 1.3 page kept its $…$ wrap
     md13 = (base / "第1章/1.3-集合的基本运算/page-0004.md").read_text("utf-8")
     assert "$A \\cup B$" in md13
+
+
+def test_outline_no_sections_degrades_to_flat(tmp_path, monkeypatch):
+    """A non-textbook auto-routed to outline (no N.N headings) stays flat — no tree, no
+    front/ bucket (ADR-0010 graceful degrade)."""
+    pdf = tmp_path / "prose.pdf"
+    _build_pdf(pdf, 2)
+    middle = _write_middle(tmp_path, [[_text(_span("just prose"))], [_text(_span("more prose"))]])
+
+    monkeypatch.setattr(mu, "run_mineru", lambda p, cache, log=print: middle)
+    monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
+
+    out_root = tmp_path / "out"
+    counters = pipeline.run([pdf], out_root, "outline", _FakeVLM(), log=lambda *_: None)
+    assert counters == {"done": 2, "failed": 0, "skipped": 0}
+
+    base = out_root / "prose"
+    assert (base / "page-0001.md").exists() and (base / "page-0002.md").exists()  # flat
+    assert not (base / "front").exists()          # no front bucket
+    assert not list(base.glob("第*章"))            # no chapter tree

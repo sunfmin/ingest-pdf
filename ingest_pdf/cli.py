@@ -25,50 +25,6 @@ def parse_pages(spec: Optional[str]) -> Optional[set[int]]:
     return out or None
 
 
-def _needs_vlm(inputs: list[str], spec, arg_strategy: str) -> bool:
-    """Would any input PDF actually run a VLM-backed strategy (page/outline)? A Layout
-    Spec rule may pin a PDF to the zero-VLM Question path, so an all-question batch loads
-    no VLM even under --strategy auto (ADR-0006/0008)."""
-    if arg_strategy == "question":
-        return False
-    import fitz
-
-    from .pipeline import _iter_pdfs
-    from .strategies.detect import get_strategy
-
-    for pdf in _iter_pdfs([Path(p) for p in inputs]):
-        doc = fitz.open(pdf)
-        try:
-            m = spec.match(pdf.stem) if spec is not None else None
-            if get_strategy(m.rule.strategy if m else arg_strategy, doc, pdf).name in ("page", "outline"):
-                return True
-        finally:
-            doc.close()
-    return False
-
-
-def _make_vlm(args: argparse.Namespace, needs_vlm: bool):
-    """Build the VLM worker per flags. No PDF needs a VLM (e.g. all-question) ⇒ NoVLM."""
-    if args.stub:
-        from .vlm.worker import StubVLM
-
-        return StubVLM()
-    if not needs_vlm:
-        from .vlm.worker import NoVLM  # zero-VLM path (ADR-0006)
-
-        return NoVLM()
-    from .vlm.worker import DEFAULT_MODEL, MlxVLM
-
-    model_id = args.model or DEFAULT_MODEL
-    print(f"loading {model_id} … (once; stays resident)", file=sys.stderr)
-    return MlxVLM(
-        model_id=model_id,
-        temperature=args.temperature,
-        repetition_penalty=args.repetition_penalty,
-        max_tokens=args.max_tokens,
-    )
-
-
 def _inspect_estimate(name: str, doc) -> object:
     """Cheap, zero-ML size estimate per resolved strategy (used by `--inspect`)."""
     from .strategies._mineru import MBlock
@@ -82,7 +38,7 @@ def _inspect_estimate(name: str, doc) -> object:
                 stream.append((pi, MBlock(bbox=(0.0, 0.0, 0.0, 0.0), text=t, type="text")))
     if name == "question":
         return len(group_questions(stream, log=lambda *_: None)) if stream else "unknown (scanned)"
-    if name in ("outline", "outline-mineru"):
+    if name == "outline":
         return "chapter/section tree resolved after transcription (ADR-0004)"
     return doc.page_count
 
@@ -133,8 +89,9 @@ def run_inspect(args: argparse.Namespace) -> int:
                     "path": str(pdf.resolve()),
                     "pages": doc.page_count,
                     "strategy": name,
-                    "needs_mineru": name in ("question", "outline-mineru"),
-                    "needs_vlm": name in ("page", "outline"),
+                    # MinerU is the sole transcriber (ADR-0010): every strategy needs it, none needs a VLM.
+                    "needs_mineru": name in ("question", "outline", "page"),
+                    "needs_vlm": False,
                     "out_subdir": pdf.stem,
                     "estimate": _inspect_estimate(name, doc),
                     "layout": lay,
@@ -171,17 +128,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--strategy",
         default="auto",
-        choices=["auto", "page", "outline", "outline-mineru", "question"],
-        help="segmentation strategy (default: auto; question & outline-mineru = MinerU, zero-VLM, ADR-0006/0009)",
+        choices=["auto", "page", "outline", "question"],
+        help="segmentation strategy (default: auto; all strategies transcribe via MinerU, ADR-0010)",
     )
     ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")
     ap.add_argument("--pages", default=None, help="1-based page filter, e.g. '1-4,7' (handy for testing)")
-    ap.add_argument("--stub", action="store_true", help="use the milestone-1 stub instead of the real VLM")
-    ap.add_argument("--model", default=None, help="mlx VLM model id (default: numind/NuExtract3-mlx-8bits; ADR-0005)")
-    ap.add_argument("--temperature", type=float, default=0.2, help="decode temperature (temp=0 degenerates; ADR-0001)")
-    ap.add_argument("--repetition-penalty", type=float, default=1.05, help="repetition penalty")
-    ap.add_argument("--max-tokens", type=int, default=4096, help="max output tokens per page")
     args = ap.parse_args(argv)
 
     if args.install_mineru:
@@ -211,8 +163,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         ap.error("--out is required (or add a Layout Spec at .ingest/layout.yaml)")
 
     from .pipeline import run
+    from .vlm.worker import NoVLM
 
-    vlm = _make_vlm(args, _needs_vlm(args.inputs, spec, args.strategy))
+    # MinerU is the sole transcriber (ADR-0010): every strategy is zero-VLM, so the pipeline's
+    # VLM slot always takes the skip path. NoVLM just carries top-level provenance.
+    vlm = NoVLM()
 
     try:
         counters = run(

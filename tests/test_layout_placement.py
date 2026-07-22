@@ -1,6 +1,7 @@
 """Layout Spec applied to placement (ADR-0008, #14): Units land at the templated path,
-relative to the repo root; --out overrides; unmatched PDFs fall back to native layout;
-an all-question spec loads no VLM. Synthetic PDFs + monkeypatched MinerU — no models."""
+relative to the repo root; --out overrides; unmatched PDFs fall back to native layout.
+Every strategy transcribes via MinerU now (ADR-0010), so the CLI tests monkeypatch it —
+synthetic PDFs + hand-written middle.json, no models."""
 
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from unittest.mock import Mock
 import fitz
 
 from ingest_pdf import layout, pipeline
-from ingest_pdf.cli import _needs_vlm, main
+from ingest_pdf.cli import main
 from ingest_pdf.placement import resolve_placement
 from ingest_pdf.strategies import _mineru
 
@@ -62,6 +63,18 @@ def _one_question_middle(path: Path) -> None:
         ]
     }
     path.write_text(json.dumps(data), "utf-8")
+
+
+def _prose_middle(path: Path) -> None:
+    """A 1-page middle.json with a single text block (no section heading) — a page/outline
+    PDF's MinerU output, so the CLI placement tests need no real MinerU (ADR-0010)."""
+    data = {"pdf_info": [{"para_blocks": [_para("just some prose, not an exam", [50, 40, 350, 60])]}]}
+    path.write_text(json.dumps(data), "utf-8")
+
+
+def _patch_mineru(monkeypatch, middle: Path) -> None:
+    monkeypatch.setattr(_mineru, "run_mineru", lambda p, cache, log=print: middle)
+    monkeypatch.setattr(_mineru, "model_identity", lambda: ("mineru", "test"))
 
 
 def _blank_pdf(path: Path, n=1, w=400, h=500) -> None:
@@ -129,8 +142,11 @@ def test_page_cli_no_out_lands_under_repo_root(tmp_path, monkeypatch, capsys):
     _write_spec(tmp_path, PSPEC)
     pdf = tmp_path / "notes.pdf"
     _prose_pdf(pdf)
+    middle = tmp_path / "mid.json"
+    _prose_middle(middle)
+    _patch_mineru(monkeypatch, middle)
     monkeypatch.chdir(tmp_path)  # discovery walks up from cwd → finds .ingest here
-    rc = main([str(pdf), "--stub"])  # no --out; the spec's repo root is the base
+    rc = main([str(pdf)])  # no --out; the spec's repo root is the base
     assert rc == 0
     assert (tmp_path / "raw" / "page-0001.png").exists()
     assert (tmp_path / "raw" / "page-0001.md").exists()
@@ -140,9 +156,12 @@ def test_out_overrides_spec_base(tmp_path, monkeypatch):
     _write_spec(tmp_path, PSPEC)
     pdf = tmp_path / "notes.pdf"
     _prose_pdf(pdf)
+    middle = tmp_path / "mid.json"
+    _prose_middle(middle)
+    _patch_mineru(monkeypatch, middle)
     monkeypatch.chdir(tmp_path)
     other = tmp_path / "elsewhere"
-    rc = main([str(pdf), "--stub", "--out", str(other)])
+    rc = main([str(pdf), "--out", str(other)])
     assert rc == 0
     assert (other / "raw" / "page-0001.png").exists()
     assert not (tmp_path / "raw").exists()
@@ -152,25 +171,12 @@ def test_unmatched_pdf_falls_back_to_native_layout(tmp_path, monkeypatch):
     _write_spec(tmp_path, PSPEC)  # only matches 'notes'
     pdf = tmp_path / "unrelated.pdf"
     _prose_pdf(pdf)
+    middle = tmp_path / "mid.json"
+    _prose_middle(middle)
+    _patch_mineru(monkeypatch, middle)
     monkeypatch.chdir(tmp_path)
-    rc = main([str(pdf), "--stub"])
+    rc = main([str(pdf)])
     assert rc == 0
     # no rule matched → historical <base>/<stem>/page-NNNN
     assert (tmp_path / "unrelated" / "page-0001.png").exists()
     assert not (tmp_path / "raw").exists()
-
-
-# ── VLM need is derived from the resolved (spec-pinned) strategies ────────────
-
-
-def test_needs_vlm_false_for_all_question_spec(tmp_path):
-    spec = layout.load_spec(explicit=_write_spec(tmp_path, QSPEC))
-    pdf = tmp_path / "2016年浙江高考数学【理】.pdf"
-    _blank_pdf(pdf)
-    assert _needs_vlm([str(pdf)], spec, "auto") is False
-
-
-def test_needs_vlm_true_when_a_page_pdf_is_present(tmp_path):
-    pdf = tmp_path / "notes.pdf"
-    _prose_pdf(pdf)
-    assert _needs_vlm([str(pdf)], None, "auto") is True

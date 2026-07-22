@@ -1,8 +1,10 @@
-"""Strategy selection (CONTEXT: auto-detect + override, ADR-0002 / ADR-0006).
+"""Strategy selection (CONTEXT: auto-detect + override, ADR-0002 / ADR-0006 / ADR-0010).
 
 A cheap text-layer heuristic — never a VLM or MinerU pass (ADR-0002: "detection is a
-cheap heuristic, not another VLM pass"). A scanned PDF has no text layer, so it yields
-no signal and falls through to Page; the user overrides with --strategy question there.
+cheap heuristic, not another VLM pass"). A scanned PDF has no text layer, so it yields no
+signal and falls through to Outline, which degrades to flat pages when it finds no section
+headings (ADR-0010); the user forces --strategy question for scanned exams, or --strategy
+page to guarantee a flat layout.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from pathlib import Path
 import fitz
 
 from .base import Strategy
-from .outline import OutlineMineruStrategy, OutlineStrategy
+from .outline import OutlineStrategy
 from .page import PageStrategy
 from .question import QuestionStrategy
 
@@ -42,12 +44,13 @@ def _signals(doc: "fitz.Document") -> tuple[int, int, int]:
 
 
 def detect(doc: "fitz.Document", pdf_path: Path) -> Strategy:
-    n_section, n_qnum, n_secnum = _signals(doc)
+    n_section, n_qnum, _ = _signals(doc)
     if n_section >= 1 and n_qnum >= 3:
         return QuestionStrategy()  # exam paper
-    if n_secnum >= 5:
-        return OutlineStrategy()  # textbook chapter/section density
-    return PageStrategy()  # universal fallback (incl. scanned / structure-less)
+    # Everything else → Outline (ADR-0010): with MinerU as the sole transcriber, a born-digital
+    # OR scanned textbook builds a real 第N章 tree, while a doc with no section headings degrades
+    # to flat pages in finalize. Page stays reachable only via explicit --strategy page.
+    return OutlineStrategy()
 
 
 def get_strategy(name: str, doc: "fitz.Document", pdf_path: Path) -> Strategy:
@@ -57,8 +60,6 @@ def get_strategy(name: str, doc: "fitz.Document", pdf_path: Path) -> Strategy:
         return PageStrategy()
     if name == "outline":
         return OutlineStrategy()
-    if name == "outline-mineru":
-        return OutlineMineruStrategy()
     if name == "question":
         return QuestionStrategy()
     raise ValueError(f"unknown strategy: {name!r}")

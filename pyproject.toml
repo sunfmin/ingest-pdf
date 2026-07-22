@@ -10,10 +10,9 @@ dependencies = [
     "pyyaml>=6",
 ]
 
-# The local VLM stack is heavy and only needed from milestone 2 on; keep it optional
-# so the core pipeline installs light. Install with:  uv sync --extra vlm
-[project.optional-dependencies]
-vlm = ["mlx-vlm>=0.6.5"]
+# No in-process VLM: MinerU (isolated venv, `ingest --install-mineru`) is the sole
+# transcription engine for every strategy (ADR-0010). The former `vlm` extra (mlx-vlm /
+# NuExtract3) was retired — the core install is light and needs no local ML stack.
 
 [project.scripts]
 ingest = "ingest_pdf.cli:main"

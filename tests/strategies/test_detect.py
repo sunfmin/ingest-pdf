@@ -32,12 +32,15 @@ def test_detect_outline():
     assert _detect(OUTLINE) == "outline"
 
 
-def test_detect_page_for_prose():
-    assert _detect(PROSE) == "page"
+def test_detect_outline_fallback_for_prose():
+    # ADR-0010: non-exam docs fall back to Outline (degrades to flat pages in finalize
+    # when no section headings are found), no longer to Page.
+    assert _detect(PROSE) == "outline"
 
 
-def test_detect_page_for_scanned_empty():
-    assert _detect("") == "page"
+def test_detect_outline_fallback_for_scanned_empty():
+    # scanned (no text layer) → no signal → Outline fallback (ADR-0010)
+    assert _detect("") == "outline"
 
 
 def test_detect_exam_wins_over_outline_density():

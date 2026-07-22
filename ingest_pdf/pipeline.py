@@ -6,8 +6,10 @@ throughput ceiling; the bounded render→vlm queue applies backpressure so we
 don't render hundreds of pages ahead of the model. Rendering and disk writes
 overlap inference, keeping the (future real) GPU saturated.
 
-Milestone 1 runs a StubVLM, so this proves the plumbing — resume, provenance,
-colocated Unit pairs — without a model.
+Since ADR-0010 MinerU is the sole transcriber and every strategy is zero-VLM, so the VLM
+worker thread below always takes the skip path (the vlm arg is a NoVLM sentinel, kept only
+for top-level provenance). The thread stays as a vestigial passthrough; the render→write
+plumbing — resume, provenance, colocated Unit pairs — is unchanged.
 """
 
 from __future__ import annotations
