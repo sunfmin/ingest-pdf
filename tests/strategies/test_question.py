@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz
 from PIL import Image
 
-from digest_pdf.models import PageJob, PageResult, RenderedPage
+from digest_pdf.models import PageJob, RenderedPage
 from digest_pdf.strategies._mineru import MBlock
 from digest_pdf.strategies.question import QuestionStrategy, _build_frags, group_questions
 
@@ -210,7 +210,7 @@ def test_emit_writes_full_and_stem_fragments(tmp_path):
     }
     rendered = _make_pdf_and_render(tmp_path)  # zoom 2.0
 
-    units = s.emit(rendered, PageResult(markdown="", questions=[]))
+    units = s.emit(rendered)
 
     names = sorted(u.name for u in units)
     assert names == ["q01-stem__p0001", "q01__p0001"]

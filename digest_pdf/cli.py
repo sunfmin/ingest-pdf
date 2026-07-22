@@ -89,9 +89,8 @@ def run_inspect(args: argparse.Namespace) -> int:
                     "path": str(pdf.resolve()),
                     "pages": doc.page_count,
                     "strategy": name,
-                    # MinerU is the sole transcriber (ADR-0010): every strategy needs it, none needs a VLM.
+                    # MinerU is the sole transcriber (ADR-0010): every strategy needs it.
                     "needs_mineru": name in ("question", "outline", "page"),
-                    "needs_vlm": False,
                     "out_subdir": pdf.stem,
                     "estimate": _inspect_estimate(name, doc),
                     "layout": lay,
@@ -187,18 +186,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         ap.error("--out is required (or add a Layout Spec at .digest/layout.yaml)")
 
     from .pipeline import run
-    from .vlm.worker import NoVLM
-
-    # MinerU is the sole transcriber (ADR-0010): every strategy is zero-VLM, so the pipeline's
-    # VLM slot always takes the skip path. NoVLM just carries top-level provenance.
-    vlm = NoVLM()
 
     try:
         counters = run(
             args.inputs,
             out_root,
             args.strategy,
-            vlm,
             dpi=args.dpi,
             n_render=args.concurrency,
             pages=parse_pages(args.pages),

@@ -35,7 +35,7 @@ def test_inspect_question_counts_text_layer_questions(tmp_path, capsys):
     r = rows[0]
     assert r["strategy"] == "question"
     assert r["estimate"] == 3
-    assert r["needs_mineru"] is True and r["needs_vlm"] is False
+    assert r["needs_mineru"] is True
     assert r["pages"] == 1 and r["out_subdir"] == "exam"
 
 
@@ -45,7 +45,7 @@ def test_inspect_auto_prose_falls_back_to_outline(tmp_path, capsys):
     r = _inspect(capsys, str(pdf))[0]  # default auto → Outline fallback (ADR-0010)
     assert r["strategy"] == "outline"
     assert isinstance(r["estimate"], str) and "ADR-0004" in r["estimate"]
-    assert r["needs_mineru"] is True and r["needs_vlm"] is False
+    assert r["needs_mineru"] is True
 
 
 def test_inspect_question_on_scanned_is_unknown(tmp_path, capsys):
@@ -65,7 +65,7 @@ def test_inspect_outline_estimate_is_deferred_string(tmp_path, capsys):
     r = _inspect(capsys, str(pdf), "--strategy", "outline")[0]
     assert r["strategy"] == "outline"
     assert isinstance(r["estimate"], str) and "ADR-0004" in r["estimate"]
-    assert r["needs_mineru"] is True and r["needs_vlm"] is False
+    assert r["needs_mineru"] is True
 
 
 def test_inspect_batch_returns_one_row_per_pdf(tmp_path, capsys):

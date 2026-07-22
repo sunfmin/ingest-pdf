@@ -22,11 +22,6 @@ _MIDDLE = {
 }
 
 
-class _V:
-    model_id = "stub"
-    revision = "m1"
-
-
 def _mk(path):
     doc = fitz.open()
     doc.new_page()
@@ -55,7 +50,7 @@ def test_plan_runs_pdfs_concurrently(monkeypatch, tmp_path):
     entered: list[int] = []
     monkeypatch.setattr(mu, "run_mineru", _fake_run_mineru_recording(barrier, entered))
 
-    counters = pipeline.run([a, b], tmp_path / "out", "question", _V(), log=lambda *_: None)
+    counters = pipeline.run([a, b], tmp_path / "out", "question", log=lambda *_: None)
 
     assert counters["failed"] == 0 and counters["done"] == 2
     assert len(set(entered)) == 2  # two distinct threads reached run_mineru together
@@ -75,5 +70,5 @@ def test_plan_serial_branch_is_correct(monkeypatch, tmp_path):
 
     monkeypatch.setattr(mu, "run_mineru", fake)
 
-    counters = pipeline.run([a, b], tmp_path / "out", "question", _V(), log=lambda *_: None)
+    counters = pipeline.run([a, b], tmp_path / "out", "question", log=lambda *_: None)
     assert counters == {"done": 2, "failed": 0, "skipped": 0}

@@ -1,29 +1,20 @@
 """End-to-end Question strategy through the pipeline (ADR-0006): full + stem Units.
 
 Synthetic 2-page PDF + hand-written middle.json (run_mineru monkeypatched) ⇒ no real
-MinerU / network. Asserts the zero-VLM bypass, the two variants per question, cross-page
-merge, per-PDF provenance, and that the VLM is never transcribed.
+MinerU / network. Asserts the two variants per question, cross-page merge, and per-PDF
+provenance.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import fitz
 from PIL import Image
 
 from digest_pdf import pipeline
 from digest_pdf.strategies import _mineru
-
-
-class _FakeVLM:
-    model_id = "stub"
-    revision = "m1"
-
-    def __init__(self) -> None:
-        self.transcribe = Mock()
 
 
 def _para(text, bbox):
@@ -72,11 +63,9 @@ def test_question_pipeline_full_and_stem_zero_vlm(tmp_path, monkeypatch):
     monkeypatch.setattr(_mineru, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"
-    vlm = _FakeVLM()
-    counters = pipeline.run([pdf], out_root, "question", vlm, log=lambda *_: None)
+    counters = pipeline.run([pdf], out_root, "question", log=lambda *_: None)
 
     assert counters == {"done": 2, "failed": 0, "skipped": 0}
-    vlm.transcribe.assert_not_called()
 
     rec = json.loads((out_root / "manifest.json").read_text())["pdfs"][str(pdf.resolve())]
     assert rec["model"] == "mineru@test" and rec["strategy"] == "question"

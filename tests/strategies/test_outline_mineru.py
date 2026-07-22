@@ -4,16 +4,15 @@ headings into the 第N章/<section>/ tree — or leaves the pages flat when a do
 
 No real MinerU / models: page_markdown is exercised on hand-written middle.json, and the
 end-to-end pipeline tests monkeypatch run_mineru + model_identity (mirrors the Question
-integration test). Asserts the zero-VLM bypass, the section headings survive as Markdown
-headings, the tree (incl. carry-forward + the front bucket) is built, and the graceful
-degrade to flat pages when no section heading is present.
+integration test). Asserts the section headings survive as Markdown headings, the tree
+(incl. carry-forward + the front bucket) is built, and the graceful degrade to flat pages
+when no section heading is present.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import fitz
 
@@ -107,15 +106,7 @@ def test_image_block_becomes_figure_ref(tmp_path):
     assert mu.page_figures(mid) == {0: [("page-0001.fig-1.jpg", "abc123.jpg")]}
 
 
-# ── end-to-end through the pipeline: tree built, zero VLM ─────────────────────────
-
-
-class _FakeVLM:
-    model_id = "stub"
-    revision = "m1"
-
-    def __init__(self) -> None:
-        self.transcribe = Mock()
+# ── end-to-end through the pipeline: tree built (MinerU sole transcriber) ─────────
 
 
 def _build_pdf(path: Path, n_pages: int) -> None:
@@ -148,11 +139,9 @@ def test_outline_mineru_pipeline_builds_tree_zero_vlm(tmp_path, monkeypatch):
     monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"
-    vlm = _FakeVLM()
-    counters = pipeline.run([pdf], out_root, "outline", vlm, log=lambda *_: None)
+    counters = pipeline.run([pdf], out_root, "outline", log=lambda *_: None)
 
     assert counters == {"done": 4, "failed": 0, "skipped": 0}
-    vlm.transcribe.assert_not_called()  # zero-VLM: MinerU owns transcription
 
     rec = json.loads((out_root / "manifest.json").read_text())["pdfs"][str(pdf.resolve())]
     assert rec["model"] == "mineru@test" and rec["strategy"] == "outline"
@@ -188,7 +177,7 @@ def test_outline_no_sections_degrades_to_flat(tmp_path, monkeypatch):
     monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"
-    counters = pipeline.run([pdf], out_root, "outline", _FakeVLM(), log=lambda *_: None)
+    counters = pipeline.run([pdf], out_root, "outline", log=lambda *_: None)
     assert counters == {"done": 2, "failed": 0, "skipped": 0}
 
     base = out_root / "prose"
@@ -221,7 +210,7 @@ def test_figures_are_copied_and_move_with_the_page(tmp_path, monkeypatch):
     monkeypatch.setattr(mu, "model_identity", lambda: ("mineru", "test"))
 
     out_root = tmp_path / "out"
-    counters = pipeline.run([pdf], out_root, "outline", _FakeVLM(), log=lambda *_: None)
+    counters = pipeline.run([pdf], out_root, "outline", log=lambda *_: None)
     assert counters == {"done": 2, "failed": 0, "skipped": 0}
 
     secdir = out_root / "book" / "第1章" / "1.3-集合的基本运算"

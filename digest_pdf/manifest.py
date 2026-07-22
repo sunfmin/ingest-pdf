@@ -1,9 +1,8 @@
 """The Manifest (CONTEXT): per-run record for idempotent resume + provenance.
 
-Resume granularity is the page — the atomic VLM call (ADR-0003). A page's Units
-are produced together from that one call and recorded under it, so re-running
-never re-burns the GPU on a page that already completed. Saved atomically after
-every page so a crash / Ctrl-C leaves a consistent file to resume from.
+Resume granularity is the page. A page's Units are produced together and recorded
+under it, so re-running never re-transcribes a page that already completed. Saved
+atomically after every page so a crash / Ctrl-C leaves a consistent file to resume from.
 """
 
 from __future__ import annotations
@@ -32,18 +31,21 @@ class Manifest:
         st = pdf_path.stat()
         return {"size": st.st_size, "mtime": int(st.st_mtime)}
 
-    def set_model(self, model_id: str, revision: str, dpi: int) -> None:
+    def set_dpi(self, dpi: int) -> None:
+        """Record the run-global render DPI. There is no run-global model id: each PDF
+        carries its own segmentation+transcription model in its record (see ensure_pdf),
+        because a single run may mix strategies (ADR-0006/0010)."""
         with self._lock:
-            self.data["model"] = {"id": model_id, "revision": revision, "dpi": dpi}
+            self.data["model"] = {"dpi": dpi}
             self._save_locked()
 
     def ensure_pdf(self, pdf_key: str, strategy: str, sig: dict, model: str | None = None) -> None:
         """Register a PDF; reset its pages if source, strategy, or model changed (stale).
 
-        `model` is the per-PDF segmentation+transcription model (ADR-0006): for the
-        VLM-driven strategies it equals the VLM id; for Question (zero-VLM) it is the
-        MinerU id. A model change invalidates provenance, so it resets like a strategy
-        change. Stored per-PDF so a single run mixing strategies stays self-consistent.
+        `model` is the per-PDF segmentation+transcription model (ADR-0006/0010): the
+        MinerU model id@revision that produced this PDF's Units. A model change invalidates
+        provenance, so it resets like a strategy change. Stored per-PDF so a single run
+        mixing strategies stays self-consistent.
         """
         with self._lock:
             pdfs = self.data["pdfs"]

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import fitz
 
@@ -36,14 +35,6 @@ def _write_spec(root: Path, text: str) -> Path:
     p = d / "layout.yaml"
     p.write_text(text, "utf-8")
     return p
-
-
-class _FakeVLM:
-    model_id = "stub"
-    revision = "m1"
-
-    def __init__(self) -> None:
-        self.transcribe = Mock()
 
 
 def _para(text, bbox):
@@ -124,7 +115,7 @@ def test_question_pipeline_lands_at_templated_path(tmp_path, monkeypatch):
     monkeypatch.setattr(_mineru, "model_identity", lambda: ("mineru", "test"))
 
     base = tmp_path / "repo"
-    counters = pipeline.run([pdf], base, "auto", _FakeVLM(), log=lambda *_: None, spec=spec)
+    counters = pipeline.run([pdf], base, "auto", log=lambda *_: None, spec=spec)
 
     assert counters["failed"] == 0 and counters["done"] == 1
     unit_dir = base / "真题" / "浙江" / "2016" / "理"

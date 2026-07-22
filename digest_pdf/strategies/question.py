@@ -37,7 +37,7 @@ import fitz
 from PIL import Image
 
 from .. import provenance
-from ..models import OutUnit, PageJob, PageResult, RenderedPage
+from ..models import OutUnit, PageJob, RenderedPage
 from ..placement import Placement
 from . import _crop, _mineru
 from ._mineru import MBlock
@@ -268,7 +268,7 @@ class QuestionStrategy:
             self._page_width[page_index] = w
         return w
 
-    def emit(self, rendered: RenderedPage, result: PageResult) -> list[OutUnit]:
+    def emit(self, rendered: RenderedPage) -> list[OutUnit]:
         frags = self._pages.get(rendered.job.page_index, [])
         if not frags:
             return []

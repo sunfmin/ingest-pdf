@@ -63,8 +63,7 @@ def find_mineru_bin() -> list[str] | None:
     """argv prefix to invoke mineru, or None if not installed.
 
     Order: $MINERU_BIN (override) → the managed venv binary. No silent network
-    fallback: if absent we raise with install instructions (mirrors the vlm extra's
-    SystemExit idiom in vlm/worker.py).
+    fallback: if absent the caller raises with install instructions (see run_mineru).
     """
     env_bin = os.environ.get("MINERU_BIN")
     if env_bin:

@@ -4,10 +4,10 @@ Shape: a pool of render threads → a pool of writer threads, joined by one boun
 Rendering (CPU) overlaps disk writes; the bounded write queue applies backpressure so we
 don't render hundreds of pages ahead of the writers.
 
-Transcription is owned by each strategy's emit() (MinerU, zero project VLM — ADR-0006/0010),
-so there is no in-process VLM stage: ADR-0001's single warm-VLM worker thread was removed
-once MinerU became the sole transcriber. The `vlm` arg is a NoVLM sentinel kept only for the
-manifest's top-level provenance id; its transcribe() is never called.
+Transcription is owned by each strategy (MinerU, the sole engine — ADR-0006/0010): plan()
+runs MinerU and holds its output, emit() supplies the Units from the render. There is no
+in-process transcription stage — ADR-0001's warm-VLM worker thread was removed with the VLM
+itself, so the pipeline is render→write. Provenance comes from the strategy's own model id.
 """
 
 from __future__ import annotations
@@ -22,17 +22,15 @@ from typing import Callable, Iterable
 import fitz
 
 from .manifest import Manifest
-from .models import PageResult, RenderedPage, RunContext
+from .models import RenderedPage, RunContext
 from .placement import resolve_placement
 from .provenance import header
 from .render import render_page
 from .strategies.detect import get_strategy
 
 _SENTINEL = None
-# The strategy owns transcription in emit() (MinerU, ADR-0010), so the writer hands it an
-# empty PageResult — emit ignores it and supplies its own Units. A render failure is carried
-# as a None RenderedPage on write_q (the writer marks that page failed).
-_EMPTY_PAGE_RESULT = PageResult(markdown="", questions=[])
+# A render failure is carried as a None RenderedPage on write_q (the writer marks that
+# page failed); a successful render carries the RenderedPage that emit() turns into Units.
 
 
 def _iter_pdfs(inputs: Iterable[Path]) -> list[Path]:
@@ -51,7 +49,6 @@ def run(
     inputs: Iterable[str | Path],
     out_root: str | Path,
     strategy_name: str,
-    vlm,
     dpi: int = 200,
     n_render: int | None = None,
     n_writers: int = 4,
@@ -64,7 +61,7 @@ def run(
     n_render = n_render or max(2, (os.cpu_count() or 4) - 2)
 
     manifest = Manifest(out_root / "manifest.json")
-    manifest.set_model(vlm.model_id, vlm.revision, dpi)
+    manifest.set_dpi(dpi)
 
     pdfs = _iter_pdfs([Path(p) for p in inputs])
     if not pdfs:
@@ -90,11 +87,9 @@ def run(
             strat = get_strategy(m.rule.strategy if m else strategy_name, doc, pdf)
             pdf_key = str(pdf.resolve())
             placement = resolve_placement(pdf, out_root, m)  # the single 'where' seam (ADR-0008)
-            # Per-PDF provenance model = "id@revision": the strategy's own model when
-            # it owns segmentation+transcription (Question/MinerU), else the VLM
-            # (ADR-0006). Including the revision makes a model upgrade invalidate pages.
-            _mid = getattr(strat, "model_id", None) or vlm.model_id
-            _mrev = getattr(strat, "revision", None) or vlm.revision
+            # Per-PDF provenance model = "id@revision", the strategy's own MinerU model
+            # (ADR-0006/0010). Including the revision makes a model upgrade invalidate pages.
+            _mid, _mrev = strat.model_id, strat.revision
             manifest.ensure_pdf(pdf_key, strat.name, Manifest.source_sig(pdf), model=f"{_mid}@{_mrev}")
             local = []
             # pages is passed into plan() so MinerU-backed strategies transcribe only the
@@ -172,16 +167,10 @@ def run(
                     counters["failed"] += 1
                 continue
             try:
-                # Provenance per Unit = the strategy's own model (MinerU); the vlm sentinel
-                # supplies only the top-level fallback id (NoVLM → "none").
-                ctx = RunContext(
-                    dpi,
-                    getattr(strat, "model_id", None) or vlm.model_id,
-                    getattr(strat, "revision", None) or vlm.revision,
-                    strat.name,
-                )
+                # Provenance per Unit = the strategy's own MinerU model (ADR-0006/0010).
+                ctx = RunContext(dpi, strat.model_id, strat.revision, strat.name)
                 recs = []
-                for u in strat.emit(rendered, _EMPTY_PAGE_RESULT):
+                for u in strat.emit(rendered):
                     md_path = job.out_dir / f"{u.name}.md"
                     md_path.parent.mkdir(parents=True, exist_ok=True)
                     md_path.write_text(header(ctx, job.pdf_path, u) + u.md_body, "utf-8")

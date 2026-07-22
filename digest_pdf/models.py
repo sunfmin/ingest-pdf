@@ -2,26 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 Box = tuple[float, float, float, float]  # x0, y0, x1, y1 in image pixels
 
 
-@dataclass(frozen=True)
-class Boundary:
-    """A VLM-reported question boundary on a page (image-pixel coords, post scale-back)."""
-
-    number: str
-    box: Box
-
-
 @dataclass
 class PageJob:
     """One unit of pipeline work: render + transcribe a single PDF page.
 
-    One VLM call per page (ADR-0003); a page may yield 1..N Units.
+    A page may yield 1..N Units (MinerU is the sole transcriber, ADR-0010).
     """
 
     pdf_path: Path
@@ -36,14 +28,6 @@ class RenderedPage:
     png_path: Path  # full-page render (also the Page-strategy Unit image)
     width: int
     height: int
-
-
-@dataclass
-class PageResult:
-    """VLM output for one page (ADR-0003: transcription + optional boundaries)."""
-
-    markdown: str
-    questions: list[Boundary] = field(default_factory=list)
 
 
 @dataclass

@@ -87,7 +87,7 @@ $DIGEST --mineru-status || $DIGEST --install-mineru
 
 ### B — The `--inspect` row shape + plan table (reference for Phase 0)
 Each element of the `--inspect` JSON array =
-`{path, pages, strategy, needs_mineru, needs_vlm, out_subdir, estimate, layout}`.
+`{path, pages, strategy, needs_mineru, out_subdir, estimate, layout}`.
 - `strategy` is the resolved segmentation (a matching Layout Spec rule pins it); `layout` =
   `{status, rule, strategy, dest}`, `status` ∈ `matched | unmatched | no-spec`.
 - `estimate`: for `question` = detected question count on text-layer PDFs, or
@@ -97,7 +97,7 @@ Each element of the `--inspect` JSON array =
 
 In Phase 0's unattended branch, render a markdown table for the user **once** (no per-PDF
 confirmation once the spec is confirmed):
-`| PDF | pages | strategy | dest | estimate | needs mineru/vlm |` — `dest` is the row's
+`| PDF | pages | strategy | dest | estimate | needs mineru |` — `dest` is the row's
 `layout.dest` (the tool's native `<stem>/` when there is no spec).
 
 ### C — Warm the MinerU server (only if some row needs_mineru)

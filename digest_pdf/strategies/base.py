@@ -1,17 +1,18 @@
 """The Segmentation Strategy protocol (CONTEXT: Segmentation Strategy).
 
 A strategy maps a PDF into pipeline PageJobs, says where each page's full render
-lands, and turns a page's VLM result into the Units to persist.
+lands, and turns a rendered page into the Units to persist.
 
-Every strategy transcribes via MinerU (the sole engine, ADR-0010); emit() supplies the
-Units, so the pipeline never calls a VLM.
+Every strategy transcribes via MinerU (the sole engine, ADR-0010): plan() runs MinerU
+and holds its output, so emit() supplies the Units straight from the render — the
+pipeline never runs a transcription stage.
 
 Optional attributes (read by the pipeline via getattr):
 
-    model_id:  str | None = None
-    revision:  str | None = None
-        The model that produced this strategy's segmentation + transcription, for
-        provenance. None → fall back to the NoVLM sentinel's ("none").
+    model_id:  str
+    revision:  str
+        The MinerU model that produced this strategy's segmentation + transcription,
+        for provenance (ADR-0010). Every strategy sets these from _mineru.model_identity().
     finalize(out_dir, manifest, pdf_key, log) -> None   (module-level, optional)
         A whole-PDF post-pass run after the page loop (e.g. Outline's tree build,
         Question's cross-page assembly). The pipeline collects strategies that
@@ -25,7 +26,7 @@ from typing import Protocol
 
 import fitz
 
-from ..models import OutUnit, PageJob, PageResult, RenderedPage
+from ..models import OutUnit, PageJob, RenderedPage
 from ..placement import Placement
 
 
@@ -57,6 +58,7 @@ class Strategy(Protocol):
         """Where the render stage writes the full-page PNG for this job."""
         ...
 
-    def emit(self, rendered: RenderedPage, result: PageResult) -> list[OutUnit]:
-        """Turn one page's VLM result into the Units to persist."""
+    def emit(self, rendered: RenderedPage) -> list[OutUnit]:
+        """Turn one rendered page into the Units to persist (transcription came from
+        MinerU in plan(); this strategy holds it)."""
         ...

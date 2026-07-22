@@ -46,7 +46,7 @@ def _setup(tmp_path) -> tuple[Manifest, object]:
     (out_dir / ".renders" / "page-0001.png").write_bytes(b"x")
 
     m = Manifest(tmp_path / "manifest.json")
-    m.set_model("mineru", "test", 200)
+    m.set_dpi(200)
     m.ensure_pdf(KEY, "question", {"size": 1, "mtime": 1}, model="mineru@test")
     m.mark_page(
         KEY, 0, "done",
