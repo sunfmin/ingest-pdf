@@ -110,7 +110,7 @@ def run(
         finally:
             doc.close()
 
-    plan_workers = max(1, min(int(os.environ.get("INGEST_PLAN_WORKERS", "3")), len(pdfs)))
+    plan_workers = max(1, min(int(os.environ.get("DIGEST_PLAN_WORKERS", "3")), len(pdfs)))
     if plan_workers == 1:
         for pdf in pdfs:
             plan_pdf(pdf)

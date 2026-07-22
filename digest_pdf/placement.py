@@ -6,7 +6,7 @@ the strategy's ``plan()``, so the "where" lives in a single seam instead of bein
 recomputed (``out_root / stem``) inside every strategy.
 
 The default reproduces the historical layout exactly. A repo-owned Layout Spec
-(``.ingest/layout.yaml``, ADR-0008) will override it here without touching any strategy.
+(``.digest/layout.yaml``, ADR-0008) will override it here without touching any strategy.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from .layout import Match
 
-# MinerU scratch base for a Layout-Spec-driven run — kept under .ingest/ so it stays
+# MinerU scratch base for a Layout-Spec-driven run — kept under .digest/ so it stays
 # out of the conforming output tree (真题/…), unlike the historical <out_root>/.mineru/.
-_SPEC_CACHE_REL = Path(".ingest") / "cache"
+_SPEC_CACHE_REL = Path(".digest") / "cache"
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ def resolve_placement(pdf_path: Path, out_root: Path, match: "Optional[Match]" =
     portion (everything above the terminal leaf segment that carries the structural
     token) becomes the Unit directory. Leaf names stay the strategy's native form in v1,
     so the terminal token (``q{qno}`` etc.) declares granularity rather than renaming.
-    MinerU scratch moves under ``<out_root>/.ingest/cache/<stem>`` to keep the conforming
+    MinerU scratch moves under ``<out_root>/.digest/cache/<stem>`` to keep the conforming
     tree clean."""
     if match is not None:
         rel = match.resolve()  # e.g. "真题/浙江/2016/理/q{qno}"

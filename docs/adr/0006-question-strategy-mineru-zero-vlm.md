@@ -35,7 +35,7 @@ MinerU 同时给出**框**与**带 LaTeX 的 OCR 文本**（`middle.json` 的 `p
 
 ## 后果
 
-- MinerU 成为**可选重型依赖**，安装隔离在 `ingest install-mineru`（镜像 + ModelScope 配置 + 模型下载）；首次 `--strategy question` 找不到 mineru 时给清晰报错指引。
+- MinerU 成为**可选重型依赖**，安装隔离在 `digest install-mineru`（镜像 + ModelScope 配置 + 模型下载）；首次 `--strategy question` 找不到 mineru 时给清晰报错指引。
 - 切题启发式**仍需标定**：换版式/换源须重跑标定，否则「免逐题人核」失效；MinerU 缺失或切分失败 → 回退 `--strategy page`。
 - 管线新增 `needs_vlm` 旁路与 `_VLM_SKIP` 哨兵（区分「VLM 主动跳过」与「VLM 失败」，后者仍记 failed）。
 - `para_blocks` 公式 span 若经标定发现劣于 `content_list`，回退为「content_list 文本 + 与 para_blocks 按 bbox-IoU 对齐」——记为 follow-up，不阻塞首版。

@@ -1,4 +1,4 @@
-"""`ingest --inspect` structure probe (skill's analyze step): zero MinerU / zero VLM."""
+"""`digest --inspect` structure probe (skill's analyze step): zero MinerU / zero VLM."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import fitz
 import pytest
 
-from ingest_pdf.cli import main
+from digest_pdf.cli import main
 
 
 def _mk(path, lines):

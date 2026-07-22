@@ -11,10 +11,10 @@ from unittest.mock import Mock
 
 import fitz
 
-from ingest_pdf import layout, pipeline
-from ingest_pdf.cli import main
-from ingest_pdf.placement import resolve_placement
-from ingest_pdf.strategies import _mineru
+from digest_pdf import layout, pipeline
+from digest_pdf.cli import main
+from digest_pdf.placement import resolve_placement
+from digest_pdf.strategies import _mineru
 
 QSPEC = r"""
 rules:
@@ -31,7 +31,7 @@ rules:
 
 
 def _write_spec(root: Path, text: str) -> Path:
-    d = root / ".ingest"
+    d = root / ".digest"
     d.mkdir(parents=True, exist_ok=True)
     p = d / "layout.yaml"
     p.write_text(text, "utf-8")
@@ -102,13 +102,13 @@ def test_resolve_placement_default_is_historical(tmp_path):
     assert pl.cache_dir == tmp_path / ".mineru" / "2016"
 
 
-def test_resolve_placement_with_match_uses_template_dir_and_ingest_cache(tmp_path):
+def test_resolve_placement_with_match_uses_template_dir_and_digest_cache(tmp_path):
     spec = layout.load_spec(explicit=_write_spec(tmp_path, QSPEC))
     stem = "2016年浙江高考数学【理】（解析版）"
     m = spec.match(stem)
     pl = resolve_placement(Path(f"x/{stem}.pdf"), tmp_path, m)
     assert pl.out_dir == tmp_path / "真题" / "浙江" / "2016" / "理"
-    assert pl.cache_dir == tmp_path / ".ingest" / "cache" / stem
+    assert pl.cache_dir == tmp_path / ".digest" / "cache" / stem
 
 
 # ── pipeline: question lands at templated path ───────────────────────────────
@@ -145,7 +145,7 @@ def test_page_cli_no_out_lands_under_repo_root(tmp_path, monkeypatch, capsys):
     middle = tmp_path / "mid.json"
     _prose_middle(middle)
     _patch_mineru(monkeypatch, middle)
-    monkeypatch.chdir(tmp_path)  # discovery walks up from cwd → finds .ingest here
+    monkeypatch.chdir(tmp_path)  # discovery walks up from cwd → finds .digest here
     rc = main([str(pdf)])  # no --out; the spec's repo root is the base
     assert rc == 0
     assert (tmp_path / "raw" / "page-0001.png").exists()

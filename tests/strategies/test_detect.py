@@ -14,7 +14,7 @@ class _Page:
 
 
 def _detect(*texts):
-    from ingest_pdf.strategies.detect import detect
+    from digest_pdf.strategies.detect import detect
 
     return detect([_Page(t) for t in texts], Path("x.pdf")).name
 

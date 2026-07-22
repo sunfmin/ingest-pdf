@@ -13,7 +13,7 @@ from unittest.mock import Mock
 
 import httpx
 
-from ingest_pdf.strategies import _mineru as mu
+from digest_pdf.strategies import _mineru as mu
 
 
 # ── parse_blocks: one source for geometry (para_blocks bbox) + text ─────────────

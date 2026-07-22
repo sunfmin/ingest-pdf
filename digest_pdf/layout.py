@@ -1,17 +1,17 @@
 """Layout Spec (CONTEXT: Layout Spec; ADR-0008) — the repo-owned, declarative
-placement source of truth at ``<repo>/.ingest/layout.yaml``.
+placement source of truth at ``<repo>/.digest/layout.yaml``.
 
 An **ordered rule table**. Each rule maps a **filename pattern** (a regex searched
 against the PDF stem, with named captures such as ``year``/``region``/``subject``) to
 a **Segmentation Strategy** *and* a **destination path template** mixing those captures
 with a structural token the segmenter emits (``qno``/``page``/``section``). First match
 wins. The tool auto-discovers the spec by walking up from cwd; the invoking repo root is
-the directory that contains ``.ingest/``, and templates resolve from there.
+the directory that contains ``.digest/``, and templates resolve from there.
 
 This module only **reads, validates, and matches** the spec. Applying a match to actual
 placement lives in ``placement.resolve_placement()`` (ADR-0008 / issue #14).
 
-Example ``.ingest/layout.yaml``::
+Example ``.digest/layout.yaml``::
 
     rules:
       - name: 浙江高考数学真题
@@ -29,7 +29,7 @@ from typing import Optional
 
 import yaml
 
-SPEC_DIRNAME = ".ingest"
+SPEC_DIRNAME = ".digest"
 SPEC_FILENAME = "layout.yaml"
 
 # The single structural token each Segmentation Strategy can supply for a template's
@@ -87,8 +87,8 @@ class Match:
 
 @dataclass(frozen=True)
 class LayoutSpec:
-    repo_root: Path  # directory containing .ingest/ — templates resolve from here
-    spec_path: Path  # the .ingest/layout.yaml file itself
+    repo_root: Path  # directory containing .digest/ — templates resolve from here
+    spec_path: Path  # the .digest/layout.yaml file itself
     rules: list[Rule]
 
     def match(self, stem: str) -> Optional[Match]:
@@ -101,7 +101,7 @@ class LayoutSpec:
 
 
 def discover_spec_path(start: Optional[Path] = None) -> Optional[Path]:
-    """Walk up from ``start`` (default cwd) looking for ``.ingest/layout.yaml``."""
+    """Walk up from ``start`` (default cwd) looking for ``.digest/layout.yaml``."""
     start = (start or Path.cwd()).resolve()
     for d in [start, *start.parents]:
         cand = d / SPEC_DIRNAME / SPEC_FILENAME
@@ -111,8 +111,8 @@ def discover_spec_path(start: Optional[Path] = None) -> Optional[Path]:
 
 
 def _repo_root_for(spec_path: Path) -> Path:
-    """The repo root = the dir containing ``.ingest/``. For an explicit ``--layout`` path
-    that is not under ``.ingest/``, fall back to the file's own directory."""
+    """The repo root = the dir containing ``.digest/``. For an explicit ``--layout`` path
+    that is not under ``.digest/``, fall back to the file's own directory."""
     if spec_path.parent.name == SPEC_DIRNAME:
         return spec_path.parent.parent
     return spec_path.parent

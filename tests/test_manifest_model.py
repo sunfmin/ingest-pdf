@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ingest_pdf.manifest import Manifest
+from digest_pdf.manifest import Manifest
 
 
 def _sig(size: int = 100, mtime: int = 1) -> dict:

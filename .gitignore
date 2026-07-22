@@ -5,7 +5,7 @@ __pycache__/
 .venv/
 uv.lock
 
-# ingest output trees (Units are regenerable; never commit them)
+# digest output trees (Units are regenerable; never commit them)
 /out/
 /*-out/
 

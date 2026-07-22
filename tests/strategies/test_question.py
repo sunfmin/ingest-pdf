@@ -7,9 +7,9 @@ from pathlib import Path
 import fitz
 from PIL import Image
 
-from ingest_pdf.models import PageJob, PageResult, RenderedPage
-from ingest_pdf.strategies._mineru import MBlock
-from ingest_pdf.strategies.question import QuestionStrategy, _build_frags, group_questions
+from digest_pdf.models import PageJob, PageResult, RenderedPage
+from digest_pdf.strategies._mineru import MBlock
+from digest_pdf.strategies.question import QuestionStrategy, _build_frags, group_questions
 
 
 def _b(text: str, bbox=(50, 0, 400, 20)) -> MBlock:
@@ -195,7 +195,7 @@ def _make_pdf_and_render(tmp_path: Path, page_pt=(400, 500), zoom=2.0):
 
 
 def _frag(number, page, box_pt, text, variant="full"):
-    from ingest_pdf.strategies.question import _Frag
+    from digest_pdf.strategies.question import _Frag
 
     return _Frag(number=number, page=page, box_pt=box_pt, text=text, variant=variant)
 

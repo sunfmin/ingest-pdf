@@ -32,7 +32,7 @@ ADR-0006 假定 MinerU 走 **pipeline 模型**（`mineru-models-download -m pipe
 
 ## 后果
 
-- 全新机器 `ingest install-mineru` 现可**复现** Pro-2605 + MLX 现状（钉 `mlx`、下 `-m all` 模型）。
+- 全新机器 `digest install-mineru` 现可**复现** Pro-2605 + MLX 现状（钉 `mlx`、下 `-m all` 模型）。
 - provenance 的 model id 由 `mineru@3.4.4` 变为 `MinerU2.5-Pro-2605-1.2B@mineru3.4.4-hybrid`；旧 manifest 里 `mineru@…` 记录会被视为 stale（per-pdf `model` 字段变化即重置，承 ADR-0006 决定 3）——重跑即以新标签重建，运行产出不变。
 - `mlx==0.31.1` 是**已知债**：MinerU 升级可能要求更新的 mlx；升级时须重验 MLX 引擎并移动此钉（代码注释与安装文案已标）。
 - 「零 VLM」的语义需正名：ADR-0006 说的「零 VLM」指**零项目自管 VLM 调用 / 零 VLM token**（ADR-0001/0005 的 mlx-vlm 栈）；MinerU 子进程内部现在**本身就是一个 VLM**（MinerU2.5-Pro）。黑盒边界不变，成本论点（试卷路径不烧项目 VLM token）不变。

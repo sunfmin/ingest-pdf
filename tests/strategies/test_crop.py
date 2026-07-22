@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PIL import Image
 
-from ingest_pdf.strategies import _crop
+from digest_pdf.strategies import _crop
 
 
 def _img_with_bands(w: int, h: int, bands: list[tuple[int, int]]) -> Image.Image:

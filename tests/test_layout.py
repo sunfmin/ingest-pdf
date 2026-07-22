@@ -9,8 +9,8 @@ from pathlib import Path
 import fitz
 import pytest
 
-from ingest_pdf import layout
-from ingest_pdf.cli import main
+from digest_pdf import layout
+from digest_pdf.cli import main
 
 GOOD_SPEC = r"""
 rules:
@@ -26,7 +26,7 @@ rules:
 
 
 def _write_spec(root: Path, text: str = GOOD_SPEC) -> Path:
-    d = root / ".ingest"
+    d = root / ".digest"
     d.mkdir(parents=True, exist_ok=True)
     p = d / "layout.yaml"
     p.write_text(text, "utf-8")
@@ -45,14 +45,14 @@ def test_discovery_walks_up_from_cwd(tmp_path):
     deep = tmp_path / "a" / "b" / "c"
     deep.mkdir(parents=True)
     found = layout.discover_spec_path(start=deep)
-    assert found == tmp_path / ".ingest" / "layout.yaml"
+    assert found == tmp_path / ".digest" / "layout.yaml"
 
 
 def test_explicit_layout_override_loads_and_sets_repo_root(tmp_path):
     p = _write_spec(tmp_path)
     spec = layout.load_spec(explicit=p)
     assert spec is not None
-    assert spec.repo_root == tmp_path  # dir containing .ingest/
+    assert spec.repo_root == tmp_path  # dir containing .digest/
     assert [r.name for r in spec.rules] == ["浙江高考数学真题", "数学教材"]
 
 
@@ -118,7 +118,7 @@ def test_no_rule_matches_returns_none(tmp_path):
 )
 def test_validation_rejects(tmp_path, spec_text):
     with pytest.raises(layout.LayoutError):
-        layout.parse_spec(spec_text, tmp_path / ".ingest" / "layout.yaml")
+        layout.parse_spec(spec_text, tmp_path / ".digest" / "layout.yaml")
 
 
 def test_valid_page_and_outline_specs_parse(tmp_path):
@@ -155,7 +155,7 @@ def test_inspect_reports_matched_rule(tmp_path, capsys):
     _write_spec(tmp_path)
     pdf = tmp_path / "2016年浙江高考数学【理】（解析版）.pdf"
     _mk_question_pdf(pdf)
-    r = _inspect(capsys, str(pdf), "--layout", str(tmp_path / ".ingest" / "layout.yaml"))[0]
+    r = _inspect(capsys, str(pdf), "--layout", str(tmp_path / ".digest" / "layout.yaml"))[0]
     assert r["strategy"] == "question"  # rule pins it, over auto
     assert r["layout"] == {
         "status": "matched",
@@ -170,12 +170,12 @@ def test_inspect_reports_unmatched(tmp_path, capsys):
     _write_spec(tmp_path)
     pdf = tmp_path / "unrelated.pdf"
     _mk_question_pdf(pdf)
-    r = _inspect(capsys, str(pdf), "--layout", str(tmp_path / ".ingest" / "layout.yaml"))[0]
+    r = _inspect(capsys, str(pdf), "--layout", str(tmp_path / ".digest" / "layout.yaml"))[0]
     assert r["layout"] == {"status": "unmatched"}
 
 
 def test_inspect_reports_no_spec(tmp_path, capsys, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # no .ingest/ up the tree
+    monkeypatch.chdir(tmp_path)  # no .digest/ up the tree
     pdf = tmp_path / "exam.pdf"
     _mk_question_pdf(pdf)
     r = _inspect(capsys, str(pdf), "--strategy", "question")[0]
@@ -186,5 +186,5 @@ def test_inspect_malformed_spec_fails_fast(tmp_path, capsys):
     _write_spec(tmp_path, "rules: []")
     pdf = tmp_path / "exam.pdf"
     _mk_question_pdf(pdf)
-    rc = main(["--inspect", str(pdf), "--layout", str(tmp_path / ".ingest" / "layout.yaml")])
+    rc = main(["--inspect", str(pdf), "--layout", str(tmp_path / ".digest" / "layout.yaml")])
     assert rc == 2

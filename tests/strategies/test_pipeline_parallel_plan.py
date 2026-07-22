@@ -7,8 +7,8 @@ import threading
 
 import fitz
 
-from ingest_pdf import pipeline
-from ingest_pdf.strategies import _mineru as mu
+from digest_pdf import pipeline
+from digest_pdf.strategies import _mineru as mu
 
 _MIDDLE = {
     "pdf_info": [
@@ -47,7 +47,7 @@ def _fake_run_mineru_recording(barrier, entered):
 
 
 def test_plan_runs_pdfs_concurrently(monkeypatch, tmp_path):
-    monkeypatch.setenv("INGEST_PLAN_WORKERS", "2")
+    monkeypatch.setenv("DIGEST_PLAN_WORKERS", "2")
     a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
     _mk(a)
     _mk(b)
@@ -62,7 +62,7 @@ def test_plan_runs_pdfs_concurrently(monkeypatch, tmp_path):
 
 
 def test_plan_serial_branch_is_correct(monkeypatch, tmp_path):
-    monkeypatch.setenv("INGEST_PLAN_WORKERS", "1")
+    monkeypatch.setenv("DIGEST_PLAN_WORKERS", "1")
     a, b = tmp_path / "a.pdf", tmp_path / "b.pdf"
     _mk(a)
     _mk(b)

@@ -1,24 +1,24 @@
 ---
-name: ingest-pdf
+name: digest-pdf
 description: >
   Digests one or many PDFs into a structured on-disk tree of (image, transcription) Units —
   textbooks (chapter/section tree), exam papers (per question, each as TWO images: with and
   without the worked solution), or plain pages. On invocation it analyzes every target PDF's
   structure, confirms the invoking repo's output **Layout Spec** once (bootstrapping
-  `.ingest/layout.yaml` when it's absent, divergent, or a filename doesn't match), then runs
-  the zero-token ingest-pdf tool as a fast unattended batch (a warm MinerU server + cross-PDF
+  `.digest/layout.yaml` when it's absent, divergent, or a filename doesn't match), then runs
+  the zero-token digest-pdf tool as a fast unattended batch (a warm MinerU server + cross-PDF
   parallelism) and verifies every Unit has its image+text pair. Use when the user says
-  "digest/ingest these PDFs", "split this PDF into images and text", "turn these exam papers /
+  "digest/digest these PDFs", "split this PDF into images and text", "turn these exam papers /
   textbooks / notes into a wiki-ready tree", "batch-process these PDFs", "extract questions /
-  chapters from these PDFs", "/ingest-pdf", or otherwise points at PDF file(s)/dir(s) and wants
+  chapters from these PDFs", "/digest-pdf", or otherwise points at PDF file(s)/dir(s) and wants
   structured (img, md) output on disk.
 argument-hint: "<pdf-or-dir ...> [--out DIR] [--strategy auto|page|outline|question] [--layout FILE]"
 allowed-tools: Read, Write, Bash, Glob, Grep
 ---
 
-# ingest-pdf — digest PDFs into a structured (image + text) tree
+# digest-pdf — digest PDFs into a structured (image + text) tree
 
-You orchestrate the **ingest-pdf** tool. The tool does all recognition/cutting with **zero
+You orchestrate the **digest-pdf** tool. The tool does all recognition/cutting with **zero
 LLM tokens** (MinerU for exams, a local VLM for textbooks/pages); your job is to understand the
 invoking repo, confirm its **Layout Spec** (where Units land — CONTEXT: Layout Spec, ADR-0008)
 once, run a fast batch, and verify. **Never** OCR or transcribe pages yourself by reading
@@ -33,31 +33,31 @@ images — that defeats the tool's design and is slow/costly.
   `<out>/<pdf-stem>/`).
 - **--strategy** — `auto` (default) | `page` | `outline` | `question`. A matching Layout Spec
   rule pins the strategy per PDF (overriding this); pass `--strategy` only on a no-spec run.
-- **--layout** — path to a Layout Spec; defaults to auto-discovering `.ingest/layout.yaml` by
+- **--layout** — path to a Layout Spec; defaults to auto-discovering `.digest/layout.yaml` by
   walking up from cwd.
 
 ## Locate the tool
 
 ```sh
-REPO="${INGEST_PDF_REPO:-$HOME/Gaokao/ingest-pdf}"   # the ingest-pdf git clone (sunfmin/ingest-pdf)
+REPO="${DIGEST_PDF_REPO:-$HOME/Gaokao/digest-pdf}"   # the digest-pdf git clone (sunfmin/digest-pdf)
 ```
-All calls go through uv (auto-creates/uses the repo venv): `uv run --project "$REPO" ingest …`.
+All calls go through uv (auto-creates/uses the repo venv): `uv run --project "$REPO" digest …`.
 If `$REPO` doesn't exist, stop and tell the user (don't clone silently).
 
 ## Workflow
 
 ### 0 — Understand the repo + confirm the Layout Spec (the gate)
-The tool lands Units per a repo-owned **Layout Spec** (`<repo>/.ingest/layout.yaml`, ADR-0008):
+The tool lands Units per a repo-owned **Layout Spec** (`<repo>/.digest/layout.yaml`, ADR-0008):
 an ordered rule table, each rule mapping a **filename pattern** (regex + named captures like
 year/region/subject) → a **segmentation strategy** + a **destination path template** (e.g.
 `真题/{region}/{year}/{subject}/q{qno}`), resolved from the repo root. The spec is the one thing
 you confirm — **once** — before an unattended batch. Steady-state runs (spec already matches)
 are unattended; the gate only fires when the spec is absent, divergent, or incomplete.
 
-1. Find the invoking repo (walk up from cwd for `.ingest/`, else cwd); read its `CONTEXT.md`,
+1. Find the invoking repo (walk up from cwd for `.digest/`, else cwd); read its `CONTEXT.md`,
    if present, for naming conventions.
 2. Probe + see matches in one cheap call (no MinerU/VLM):
-   `uv run --project "$REPO" ingest --inspect <targets...>`
+   `uv run --project "$REPO" digest --inspect <targets...>`
    Each row now carries `layout: {status, rule, strategy, dest}`; `status` ∈
    `matched | unmatched | no-spec`.
 3. Gate on the result:
@@ -67,7 +67,7 @@ are unattended; the gate only fires when the spec is absent, divergent, or incom
      spec** → **STOP and confirm.** Propose a Layout Spec: derive filename-pattern rules from the
      target stems + the repo's conventions, pick each rule's strategy, write `path` templates that
      fit the repo. Present it as a YAML block, wait for the user to approve or adjust, then
-     **write** `<repo>/.ingest/layout.yaml` and re-run `--inspect`.
+     **write** `<repo>/.digest/layout.yaml` and re-run `--inspect`.
    - An **`unmatched`** stem → offer to add a rule that covers it; never fall back silently to the
      tool's native `<stem>/` layout.
 
@@ -76,7 +76,7 @@ Using the Phase 0 `--inspect` rows: if any row has `needs_mineru: true` **and** 
 MinerU venv is absent, install it once (idempotent; ~2 GB models via ModelScope; print a one-line
 notice, then continue — the layout is already confirmed):
 ```sh
-[ -x "$HOME/.cache/ingest-pdf/mineru-venv/bin/mineru" ] || uv run --project "$REPO" ingest --install-mineru
+[ -x "$HOME/.cache/digest-pdf/mineru-venv/bin/mineru" ] || uv run --project "$REPO" digest --install-mineru
 ```
 
 ### B — The `--inspect` row shape + plan table (reference for Phase 0)
@@ -101,9 +101,9 @@ to it over HTTP automatically. If it fails to start, warn and continue without t
 falls back to per-PDF CLI — slower but works).
 ```sh
 PORT="${MINERU_PORT:-8765}"
-CFG="$HOME/.cache/ingest-pdf/mineru.json"   # written by --install-mineru (model-source=modelscope)
-MINERU_TOOLS_CONFIG_JSON="$CFG" nohup "$HOME/.cache/ingest-pdf/mineru-venv/bin/mineru-api" \
-    --host 127.0.0.1 --port "$PORT" > "$HOME/.cache/ingest-pdf/mineru-server.log" 2>&1 &
+CFG="$HOME/.cache/digest-pdf/mineru.json"   # written by --install-mineru (model-source=modelscope)
+MINERU_TOOLS_CONFIG_JSON="$CFG" nohup "$HOME/.cache/digest-pdf/mineru-venv/bin/mineru-api" \
+    --host 127.0.0.1 --port "$PORT" > "$HOME/.cache/digest-pdf/mineru-server.log" 2>&1 &
 SERVER_PID=$!
 for i in $(seq 1 60); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break; sleep 2; done
 export MINERU_API_URL="http://127.0.0.1:$PORT"
@@ -114,12 +114,12 @@ Skip this block entirely if no row needs MinerU.
 With a confirmed Layout Spec, **omit `--out` and `--strategy`** — the spec supplies the base
 (repo root) and pins the strategy per PDF. Pass them only to override, or on a no-spec run.
 ```sh
-uv run --project "$REPO" ingest <targets...> --concurrency "${INGEST_CONCURRENCY:-}"
+uv run --project "$REPO" digest <targets...> --concurrency "${DIGEST_CONCURRENCY:-}"
 # no-spec / override:  add  --out "$OUT" --strategy <s>
 ```
 The tool parallelizes across PDFs (planning + MinerU submits) and across pages (render/write)
 within this single process, so one call saturates the machine — do **not** fan out multiple
-`ingest` processes (they'd race on the shared manifest). Re-running resumes from the manifest.
+`digest` processes (they'd race on the shared manifest). Re-running resumes from the manifest.
 
 ### E — Verify
 Read `<out>/manifest.json`: per PDF, count `done` vs `failed` pages. Cross-check on disk that
@@ -157,6 +157,6 @@ image; any failed pages with a suggested re-run).
   question` for scanned exam papers (MinerU handles them).
 - The warm server (C) is what makes big batches fast; if you skipped it and the batch is slow,
   that's why — offer to re-run with it.
-- The one file you may write is `<invoking-repo>/.ingest/layout.yaml` (the Layout Spec bootstrap,
+- The one file you may write is `<invoking-repo>/.digest/layout.yaml` (the Layout Spec bootstrap,
   Phase 0). Do **not** modify `~/.agents`/`~/.claude/skills` (the skill's own install), do not
   push, do not edit the lockfile — this skill only *uses* the tool.

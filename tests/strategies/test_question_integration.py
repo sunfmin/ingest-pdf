@@ -14,8 +14,8 @@ from unittest.mock import Mock
 import fitz
 from PIL import Image
 
-from ingest_pdf import pipeline
-from ingest_pdf.strategies import _mineru
+from digest_pdf import pipeline
+from digest_pdf.strategies import _mineru
 
 
 class _FakeVLM:

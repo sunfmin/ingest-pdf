@@ -1,4 +1,4 @@
-# ingest-pdf
+# digest-pdf
 
 ## Agent skills
 

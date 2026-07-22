@@ -17,9 +17,9 @@ from unittest.mock import Mock
 
 import fitz
 
-from ingest_pdf import pipeline
-from ingest_pdf.strategies import _mineru as mu
-from ingest_pdf.strategies import outline
+from digest_pdf import pipeline
+from digest_pdf.strategies import _mineru as mu
+from digest_pdf.strategies import outline
 
 
 # ── page_markdown: titles → headings, formulas wrapped, images/blanks dropped ────

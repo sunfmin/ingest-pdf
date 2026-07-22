@@ -1,7 +1,7 @@
 """MinerU subprocess runner + middle.json parser (ADR-0006, Question strategy).
 
 MinerU is a heavy optional dependency kept OUT of the core venv; we drive it as a
-subprocess from an isolated uv venv (built by `ingest install-mineru`) and consume
+subprocess from an isolated uv venv (built by `digest install-mineru`) and consume
 only its `*_middle.json`. Two lessons from the spike, baked in here:
 
   * Coordinates come from `pdf_info[pi].para_blocks[].bbox` — these are in **PDF
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 # Isolated venv + modelscope config, both under the user's cache (never the repo).
-CACHE_ROOT = Path.home() / ".cache" / "ingest-pdf"
+CACHE_ROOT = Path.home() / ".cache" / "digest-pdf"
 MINERU_VENV = CACHE_ROOT / "mineru-venv"
 MINERU_BIN_PATH = MINERU_VENV / "bin" / "mineru"
 MINERU_CONFIG_PATH = CACHE_ROOT / "mineru.json"
@@ -127,7 +127,7 @@ _NOT_INSTALLED = (
     "MinerU is not installed in the isolated venv at {venv}.\n"
     "The Question strategy needs it for segmentation + transcription (ADR-0006).\n"
     "Install once with:\n"
-    "    ingest install-mineru\n"
+    "    digest install-mineru\n"
     "or point $MINERU_BIN at an existing mineru executable."
 )
 
@@ -430,7 +430,7 @@ def page_figures(middle: Path) -> dict[int, list[tuple[str, str]]]:
     return out
 
 
-# ── one-time installer (driven by `ingest install-mineru`) ──────────────────────
+# ── one-time installer (driven by `digest install-mineru`) ──────────────────────
 
 _PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
 

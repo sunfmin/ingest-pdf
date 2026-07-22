@@ -6,9 +6,9 @@ import json
 
 from PIL import Image
 
-from ingest_pdf.manifest import Manifest
-from ingest_pdf.strategies import _crop
-from ingest_pdf.strategies import question as qmod
+from digest_pdf.manifest import Manifest
+from digest_pdf.strategies import _crop
+from digest_pdf.strategies import question as qmod
 
 KEY = "/p.pdf"
 
@@ -27,7 +27,7 @@ _FRAGS = {
 
 def _frag_md(page: int, box: list, body: str) -> str:
     return (
-        f"<!-- ingest-pdf · mineru@test · 200dpi · strategy question\n"
+        f"<!-- digest-pdf · mineru@test · 200dpi · strategy question\n"
         f"     source: paper.pdf · page {page} · box {box} -->\n\n{body}"
     )
 

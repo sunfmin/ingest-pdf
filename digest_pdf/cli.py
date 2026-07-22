@@ -1,4 +1,4 @@
-"""`ingest` CLI — digest PDFs into a tree of (image, transcription) Units."""
+"""`digest` CLI — digest PDFs into a tree of (image, transcription) Units."""
 
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ def run_inspect(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="ingest",
+        prog="digest",
         description="Digest PDFs into a structured tree of (image, transcription) Units.",
     )
     ap.add_argument("inputs", nargs="*", help="PDF files or directories (recursed for *.pdf)")
@@ -123,7 +123,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--layout",
         default=None,
-        help="path to a Layout Spec (default: auto-discover .ingest/layout.yaml from cwd; ADR-0008)",
+        help="path to a Layout Spec (default: auto-discover .digest/layout.yaml from cwd; ADR-0008)",
     )
     ap.add_argument(
         "--strategy",
@@ -157,10 +157,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     # The Layout Spec owns the destination: without --out, land under the spec's repo root
-    # (the dir containing .ingest/). --out, when given, overrides that base (ADR-0008).
+    # (the dir containing .digest/). --out, when given, overrides that base (ADR-0008).
     out_root = args.out or (str(spec.repo_root) if spec else None)
     if not out_root:
-        ap.error("--out is required (or add a Layout Spec at .ingest/layout.yaml)")
+        ap.error("--out is required (or add a Layout Spec at .digest/layout.yaml)")
 
     from .pipeline import run
     from .vlm.worker import NoVLM

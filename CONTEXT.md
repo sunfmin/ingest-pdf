@@ -1,10 +1,10 @@
-# ingest-pdf
+# digest-pdf
 
 A general-purpose PDF **digestion** tool: feed it any PDF and it emits a structured on-disk tree of *(page/segment image, transcribed-text)* pairs, with the directory shape adapting to the PDF (textbook chapters, exam questions, or plain pages).
 
 ## Language
 
-**Ingest（消化 / 摄入）**:
+**Digest（消化 / 摄入）**:
 The end-to-end process of turning one input PDF into a structured tree of Units on disk. The name of the whole tool and its single verb.
 _Avoid_: import, parse, convert
 
@@ -37,7 +37,7 @@ A sub-page crop: one page yielding N Unit images (e.g. several questions printed
 _Avoid_: layout (as a verb), path rule
 
 **Layout Spec（布局规约）**:
-A repo-owned, declarative file (`<repo>/.ingest/layout.yaml`) that is the **single source of truth** for Placement in the invoking repo. An **ordered list of rules**, each mapping a **filename pattern** (regex with named captures such as `year`/`region`/`subject`) to a **Segmentation Strategy** *and* a **destination path template** (mixing those captures with structural tokens the segmenter emits — `qno`, `page`, `section`). First match wins; a template's terminal token (`q{qno}`) is the Unit's filename prefix, the segmenter appends suffixes/extensions (`-stem`, `.png`, `.md`). Templates resolve from the **repo root** — the spec owns the destination, so `--out` is at most an override. The tool auto-discovers it by walking up from cwd. Because a consumer's taxonomy lives in the consumer's own spec, the tool itself stays consumer-agnostic (see ADR-0008).
+A repo-owned, declarative file (`<repo>/.digest/layout.yaml`) that is the **single source of truth** for Placement in the invoking repo. An **ordered list of rules**, each mapping a **filename pattern** (regex with named captures such as `year`/`region`/`subject`) to a **Segmentation Strategy** *and* a **destination path template** (mixing those captures with structural tokens the segmenter emits — `qno`, `page`, `section`). First match wins; a template's terminal token (`q{qno}`) is the Unit's filename prefix, the segmenter appends suffixes/extensions (`-stem`, `.png`, `.md`). Templates resolve from the **repo root** — the spec owns the destination, so `--out` is at most an override. The tool auto-discovers it by walking up from cwd. Because a consumer's taxonomy lives in the consumer's own spec, the tool itself stays consumer-agnostic (see ADR-0008).
 _Avoid_: config, template, mapping file
 
 **Manifest（清单）**:

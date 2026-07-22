@@ -1,6 +1,6 @@
-# ingest-pdf
+# digest-pdf
 
-PDF ingestion for the Gaokao project.
+PDF digestion for the Gaokao project.
 
 ## Agent skills
 
@@ -8,7 +8,7 @@ This repo is configured for Matt Pocock's engineering skills. Configuration live
 
 ## Strategies
 
-`ingest <pdf> --out <dir> [--strategy auto|page|outline|question]` (default `auto`).
+`digest <pdf> --out <dir> [--strategy auto|page|outline|question]` (default `auto`).
 
 **MinerU is the sole transcription engine** — every strategy runs it, **zero project VLM
 tokens** (ADR-0010). `auto` routes exam papers to **question** and everything else to
@@ -24,10 +24,10 @@ tokens** (ADR-0010). `auto` routes exam papers to **question** and everything el
 
 Under the hood MinerU runs its bundled `MinerU2.5-Pro` VLM via the `hybrid-auto-engine`
 backend, MLX-accelerated on Apple Silicon (ADR-0007). MinerU is a heavy dependency kept in
-an isolated venv out of the core install; set it up once before ingesting anything:
+an isolated venv out of the core install; set it up once before digesting anything:
 
 ```sh
-ingest --install-mineru      # isolated venv + all models (ModelScope), mlx pinned
+digest --install-mineru      # isolated venv + all models (ModelScope), mlx pinned
 ```
 
 or point `$MINERU_BIN` at an existing `mineru` executable. Each Unit's provenance header

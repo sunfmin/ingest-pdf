@@ -19,7 +19,7 @@ class Manifest:
     def __init__(self, path: Path):
         self.path = path
         self._lock = threading.Lock()
-        self.data: dict[str, Any] = {"tool": "ingest-pdf", "model": {}, "pdfs": {}}
+        self.data: dict[str, Any] = {"tool": "digest-pdf", "model": {}, "pdfs": {}}
         if path.exists():
             try:
                 self.data = json.loads(path.read_text("utf-8"))
