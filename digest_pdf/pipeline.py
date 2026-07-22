@@ -100,7 +100,7 @@ def run(
                 local.append((job, strat))
             with plan_lock:
                 planned.extend(local)
-                if hasattr(strat, "finalize"):
+                if strat.finalize is not None:  # declared member, not reflection (base.Strategy)
                     finalize_targets[pdf_key] = (strat, placement.out_dir)
         finally:
             doc.close()
@@ -125,7 +125,7 @@ def run(
             try:
                 strat.finalize(odir, manifest, pdf_key, log=log)
             except Exception as e:
-                log(f"  ✗ {getattr(strat, 'name', '?')} finalize {odir.name}: {e}")
+                log(f"  ✗ {strat.name} finalize {odir.name}: {e}")
 
     if not todo:
         _finalize()  # a fully-resumed run still (idempotently) runs each strategy's finalize

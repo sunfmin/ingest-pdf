@@ -7,27 +7,26 @@ Every strategy transcribes via MinerU (the sole engine, ADR-0010): plan() runs M
 and holds its output, so emit() supplies the Units straight from the render — the
 pipeline never runs a transcription stage.
 
-Optional attributes (read by the pipeline via getattr):
-
-    model_id:  str
-    revision:  str
-        The MinerU model that produced this strategy's segmentation + transcription,
-        for provenance (ADR-0010). Every strategy sets these from _mineru.model_identity().
-    finalize(out_dir, manifest, pdf_key, log) -> None   (module-level, optional)
-        A whole-PDF post-pass run after the page loop (e.g. Outline's tree build,
-        Question's cross-page assembly). The pipeline collects strategies that
-        expose it and calls each once per PDF.
+The interface is total: everything the pipeline reads is a declared member (no getattr /
+hasattr reflection). ``model_id``/``revision`` name the MinerU model for provenance, and
+``finalize`` is either a whole-PDF post-pass callable or ``None`` — the pipeline branches on
+that value, so a strategy with no post-pass declares ``finalize = None`` rather than omitting
+it. A fake strategy is complete exactly when it satisfies this Protocol.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Optional, Protocol
 
 import fitz
 
 from ..models import OutUnit, PageJob, RenderedPage
 from ..placement import Placement
+
+# A whole-PDF post-pass run once after the page loop (Outline's tree build, Question's
+# cross-page assembly): (out_dir, manifest, pdf_key, *, log) -> None. None = no post-pass.
+Finalizer = Callable[..., None]
 
 
 def strip_header(md: str) -> str:
@@ -41,6 +40,12 @@ def strip_header(md: str) -> str:
 
 class Strategy(Protocol):
     name: str
+    # The MinerU model that produced this strategy's segmentation + transcription, for
+    # provenance (ADR-0010); every strategy sets these from _mineru.model_identity().
+    model_id: str
+    revision: str
+    # Whole-PDF post-pass, or None. Declared (not discovered) — see module docstring.
+    finalize: Optional[Finalizer]
 
     def plan(
         self, doc: "fitz.Document", pdf_path: Path, pdf_key: str, placement: Placement, pages=None

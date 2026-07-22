@@ -46,3 +46,29 @@ def test_detect_outline_fallback_for_scanned_empty():
 def test_detect_exam_wins_over_outline_density():
     # an exam paper also has section-number-like lines; the 大题头 makes it an exam
     assert _detect(EXAM + "\n1.1 stray\n2.2 stray\n3.3 stray\n4.4 stray\n5.5 stray") == "question"
+
+
+# ── the Strategy interface is total: every member the pipeline reads is declared ──
+
+
+def test_strategy_interface_is_total():
+    """The pipeline reads name/model_id/revision/finalize as declared members, never by
+    getattr/hasattr. Every strategy the factory returns must satisfy that contract."""
+    from digest_pdf.strategies.detect import get_strategy
+
+    for name in ("page", "outline", "question"):
+        s = get_strategy(name, None, Path("x.pdf"))
+        assert s.name == name
+        assert isinstance(s.model_id, str) and isinstance(s.revision, str)
+        # finalize is a declared member on every strategy — a callable or None, never absent
+        assert s.finalize is None or callable(s.finalize)
+
+
+def test_page_has_no_post_pass_outline_and_question_do():
+    """finalize discriminates the post-pass strategies without reflection: Page = None,
+    Outline/Question = callable (the pipeline branches on exactly this)."""
+    from digest_pdf.strategies.detect import get_strategy
+
+    assert get_strategy("page", None, Path("x.pdf")).finalize is None
+    assert callable(get_strategy("outline", None, Path("x.pdf")).finalize)
+    assert callable(get_strategy("question", None, Path("x.pdf")).finalize)

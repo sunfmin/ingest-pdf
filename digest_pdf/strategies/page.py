@@ -20,6 +20,7 @@ class PageStrategy:
     """MinerU transcribes each page; one full-page Unit per page (ADR-0010)."""
 
     name = "page"
+    finalize = None  # no whole-PDF post-pass (Outline overrides; see base.Strategy)
 
     def __init__(self) -> None:
         self.model_id, self.revision = _mineru.model_identity()
