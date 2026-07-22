@@ -279,6 +279,49 @@ def parse_blocks(middle: Path) -> dict[int, list[MBlock]]:
     return out
 
 
+# ── per-page Markdown for the Outline path (ADR-0009) ────────────────────────────
+# The Question path consumes parse_blocks (bbox geometry, to crop each question). The
+# Outline path needs no geometry — one whole page = one Unit — only faithful per-page
+# Markdown whose section headings survive as Markdown headings, because outline.finalize
+# harvests the `N.N …` section number from `#`-prefixed lines. middle.json marks headings
+# with a `type == "title"` block carrying a `level`, so we surface those as `#` headings;
+# everything else (formula spans, text) reuses the same span reconstruction as parse_blocks.
+
+
+def _block_markdown(blk: dict) -> str:
+    typ = blk.get("type", "text")
+    if typ == "image":
+        # The figure is preserved in the full-page Unit image; inlining MinerU's cropped
+        # figure into the Markdown is a documented follow-up (ADR-0009), not v1.
+        return ""
+    text = _block_text(blk).strip()
+    if not text:
+        return ""
+    if typ == "title":
+        level = blk.get("level") or 1
+        try:
+            level = max(1, min(int(level), 6))
+        except (TypeError, ValueError):
+            level = 1
+        return f"{'#' * level} {text}"
+    return text
+
+
+def page_markdown(middle: Path) -> dict[int, str]:
+    """middle.json → {page_index: markdown}, in reading order (ADR-0009, Outline path).
+
+    One paragraph per para_block; a `title` block becomes a `#` heading (so
+    ``outline.section_of_page`` can read the section number), formula spans keep their
+    ``$…$`` / ``$$…$$`` wrap (via ``_block_text``), and image blocks are skipped.
+    """
+    data = json.loads(middle.read_text("utf-8"))
+    out: dict[int, str] = {}
+    for pi, page in enumerate(data.get("pdf_info", [])):
+        parts = [md for blk in page.get("para_blocks", []) if (md := _block_markdown(blk))]
+        out[pi] = "\n\n".join(parts)
+    return out
+
+
 # ── one-time installer (driven by `ingest install-mineru`) ──────────────────────
 
 _PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"

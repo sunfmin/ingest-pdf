@@ -17,6 +17,9 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..models import OutUnit, PageJob
+from ..placement import Placement
+from . import _mineru
 from .base import strip_header
 from .page import PageStrategy
 
@@ -113,3 +116,52 @@ def finalize(out_dir: Path, manifest: "Manifest", pdf_key: str, log=print) -> No
 
 # Exposed on the class so the pipeline's generic finalize collector (ADR-0006) can call it.
 OutlineStrategy.finalize = staticmethod(finalize)
+
+
+class OutlineMineruStrategy:
+    """Outline via MinerU (ADR-0009): the textbook path with MinerU as the transcriber
+    instead of the mlx VLM. MinerU transcribes each page — text + LaTeX + `#` section
+    headings from its title blocks — with zero project VLM (needs_vlm=False, like Question,
+    ADR-0006); the *same* ``finalize`` as OutlineStrategy harvests those headings into the
+    ``第N章/<section>/`` tree. One whole page = one Unit (its figure preserved in the page
+    image), so placement mirrors PageStrategy.
+
+    Why a MinerU transcriber for textbooks: on scanned math pages MinerU keeps figures and
+    is far faster than the per-page VLM, and it emits section titles as headings the tree
+    needs. The mlx VLM outline path (OutlineStrategy) stays as-is; making this the default
+    is gated on a cross-run stability calibration (ADR-0009 revises ADR-0005/0007).
+    """
+
+    name = "outline-mineru"
+    needs_vlm = False
+
+    def __init__(self) -> None:
+        self.model_id, self.revision = _mineru.model_identity()
+        self._md: dict[int, str] = {}  # page_index → transcription markdown
+
+    def plan(self, doc, pdf_path: Path, pdf_key: str, placement: Placement) -> list["PageJob"]:
+        middle = _mineru.run_mineru(pdf_path, placement.cache_dir)
+        self._md = _mineru.page_markdown(middle)
+        out_dir = placement.out_dir
+        return [
+            PageJob(pdf_path=pdf_path, pdf_key=pdf_key, page_index=i, out_dir=out_dir)
+            for i in range(doc.page_count)
+        ]
+
+    def render_target(self, job: "PageJob") -> Path:
+        return job.out_dir / f"page-{job.page_index + 1:04d}.png"
+
+    def emit(self, rendered, result) -> list["OutUnit"]:
+        name = f"page-{rendered.job.page_index + 1:04d}"
+        return [
+            OutUnit(
+                name=name,
+                md_body=self._md.get(rendered.job.page_index, ""),
+                image_name=f"{name}.png",
+                source_page=rendered.job.page_index + 1,
+            )
+        ]
+
+
+# Same tree-building post-pass as OutlineStrategy — the harvester is transcriber-agnostic.
+OutlineMineruStrategy.finalize = staticmethod(finalize)

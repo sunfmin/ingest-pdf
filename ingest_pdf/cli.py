@@ -82,7 +82,7 @@ def _inspect_estimate(name: str, doc) -> object:
                 stream.append((pi, MBlock(bbox=(0.0, 0.0, 0.0, 0.0), text=t, type="text")))
     if name == "question":
         return len(group_questions(stream, log=lambda *_: None)) if stream else "unknown (scanned)"
-    if name == "outline":
+    if name in ("outline", "outline-mineru"):
         return "chapter/section tree resolved after transcription (ADR-0004)"
     return doc.page_count
 
@@ -133,7 +133,7 @@ def run_inspect(args: argparse.Namespace) -> int:
                     "path": str(pdf.resolve()),
                     "pages": doc.page_count,
                     "strategy": name,
-                    "needs_mineru": name == "question",
+                    "needs_mineru": name in ("question", "outline-mineru"),
                     "needs_vlm": name in ("page", "outline"),
                     "out_subdir": pdf.stem,
                     "estimate": _inspect_estimate(name, doc),
@@ -171,8 +171,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument(
         "--strategy",
         default="auto",
-        choices=["auto", "page", "outline", "question"],
-        help="segmentation strategy (default: auto; question=MinerU, zero-VLM, ADR-0006)",
+        choices=["auto", "page", "outline", "outline-mineru", "question"],
+        help="segmentation strategy (default: auto; question & outline-mineru = MinerU, zero-VLM, ADR-0006/0009)",
     )
     ap.add_argument("--dpi", type=int, default=200, help="render DPI (default 200)")
     ap.add_argument("--concurrency", type=int, default=None, help="render workers (default: cpu-2)")

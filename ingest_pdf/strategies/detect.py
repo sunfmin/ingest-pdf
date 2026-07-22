@@ -13,7 +13,7 @@ from pathlib import Path
 import fitz
 
 from .base import Strategy
-from .outline import OutlineStrategy
+from .outline import OutlineMineruStrategy, OutlineStrategy
 from .page import PageStrategy
 from .question import QuestionStrategy
 
@@ -57,6 +57,8 @@ def get_strategy(name: str, doc: "fitz.Document", pdf_path: Path) -> Strategy:
         return PageStrategy()
     if name == "outline":
         return OutlineStrategy()
+    if name == "outline-mineru":
+        return OutlineMineruStrategy()
     if name == "question":
         return QuestionStrategy()
     raise ValueError(f"unknown strategy: {name!r}")
